@@ -15,6 +15,7 @@ type Upstream struct {
 	Weight          int          `yaml:"weight"`
 	ModelMappings   ModelMapping `yaml:"model_mappings"`
 	AvailableModels []string     `yaml:"available_models"`
+	MustStream      bool         `yaml:"must_stream"`
 }
 
 func (u *Upstream) MapModel(model string) string {

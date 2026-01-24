@@ -11,6 +11,7 @@ API proxy for Anthropic Claude API with intelligent load balancing and automatic
 - **Automatic Failover** - Seamlessly retry failed requests on alternative upstreams
 - **Detailed Logging** - Track prompt previews, model mappings, upstream selection, and error responses
 - **Streaming Support** - Full support for streaming responses
+- **Upstream Must-Stream Fallback** - Force streaming-only upstreams while keeping non-stream client compatibility
 
 ## Installation
 
@@ -35,6 +36,8 @@ upstreams:
     base_url: "https://api.anthropic.com"
     token: "sk-ant-xxx"
     weight: 10
+    # Optional: force upstream streaming and convert back to JSON for non-stream clients
+    must_stream: false
     model_mappings:
       "claude-3-opus": "claude-3-opus-20240229"
       "claude-3-sonnet": "claude-3-sonnet-20240229"

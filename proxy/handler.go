@@ -1,12 +1,14 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/missdeer/aiproxy/balancer"
@@ -195,13 +197,20 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-func (h *Handler) forwardRequest(upstream config.Upstream, model string, originalBody []byte, isStream bool, originalReq *http.Request) (int, []byte, http.Header, error) {
+func (h *Handler) forwardRequest(upstream config.Upstream, model string, originalBody []byte, clientWantsStream bool, originalReq *http.Request) (int, []byte, http.Header, error) {
 	var bodyMap map[string]any
 	if err := json.Unmarshal(originalBody, &bodyMap); err != nil {
 		return 0, nil, nil, err
 	}
 
 	bodyMap["model"] = model
+
+	// Check if we need to force streaming for this upstream
+	forceStream := upstream.MustStream && !clientWantsStream
+	if forceStream {
+		bodyMap["stream"] = true
+		log.Printf("[INFO] Forcing stream=true for upstream %s (mustStream enabled)", upstream.Name)
+	}
 
 	modifiedBody, err := json.Marshal(bodyMap)
 	if err != nil {
@@ -228,6 +237,21 @@ func (h *Handler) forwardRequest(upstream config.Upstream, model string, origina
 	}
 	defer resp.Body.Close()
 
+	// If we forced streaming, we need to convert the SSE response back to non-streaming format
+	if forceStream && resp.StatusCode < 400 {
+		nonStreamResp, err := h.convertStreamToNonStream(resp.Body)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
+		}
+		// Preserve upstream headers (e.g., request IDs / rate limits), but fix content headers.
+		headers := resp.Header.Clone()
+		stripHopByHopHeaders(headers)
+		headers.Del("Content-Length")
+		headers.Del("Content-Encoding")
+		headers.Set("Content-Type", "application/json")
+		return resp.StatusCode, nonStreamResp, headers, nil
+	}
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return 0, nil, nil, err
@@ -245,4 +269,227 @@ func (h *Handler) streamResponse(w http.ResponseWriter, body []byte) {
 
 	w.Write(body)
 	flusher.Flush()
+}
+
+func stripHopByHopHeaders(h http.Header) {
+	// https://www.rfc-editor.org/rfc/rfc2616#section-13.5.1 (obsoleted, but list remains applicable)
+	if connection := h.Get("Connection"); connection != "" {
+		for _, header := range strings.Split(connection, ",") {
+			header = strings.TrimSpace(header)
+			if header != "" {
+				h.Del(header)
+			}
+		}
+	}
+	for _, header := range []string{
+		"Connection",
+		"Proxy-Connection",
+		"Keep-Alive",
+		"Proxy-Authenticate",
+		"Proxy-Authorization",
+		"TE",
+		"Trailer",
+		"Transfer-Encoding",
+		"Upgrade",
+	} {
+		h.Del(header)
+	}
+}
+
+// convertStreamToNonStream reads SSE stream events and converts them to a non-streaming response
+func (h *Handler) convertStreamToNonStream(reader io.Reader) ([]byte, error) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+	var response struct {
+		ID           string `json:"id"`
+		Type         string `json:"type"`
+		Role         string `json:"role"`
+		Content      []any  `json:"content"`
+		Model        string `json:"model"`
+		StopReason   string `json:"stop_reason,omitempty"`
+		StopSequence string `json:"stop_sequence,omitempty"`
+		Usage        struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	response.Type = "message"
+	response.Role = "assistant"
+	response.Content = make([]any, 0)
+
+	// Track content blocks being built
+	contentBlocks := make(map[int]map[string]any)
+	var (
+		currentEventType string
+		dataBuilder      strings.Builder
+		sawMessageStop   bool
+	)
+
+	flushEvent := func() error {
+		if dataBuilder.Len() == 0 {
+			return nil
+		}
+		data := dataBuilder.String()
+		dataBuilder.Reset()
+
+		data = strings.TrimSpace(data)
+		if data == "" || data == "[DONE]" {
+			return nil
+		}
+
+		var event map[string]any
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return fmt.Errorf("invalid SSE JSON for event %q: %w (data=%s)", currentEventType, err, truncateString(data, 200))
+		}
+
+		eventType := currentEventType
+		if eventType == "" {
+			if t, ok := event["type"].(string); ok {
+				eventType = t
+			}
+		}
+
+		switch eventType {
+		case "message_start":
+			if msg, ok := event["message"].(map[string]any); ok {
+				if id, ok := msg["id"].(string); ok {
+					response.ID = id
+				}
+				if model, ok := msg["model"].(string); ok {
+					response.Model = model
+				}
+				if usage, ok := msg["usage"].(map[string]any); ok {
+					if input, ok := usage["input_tokens"].(float64); ok {
+						response.Usage.InputTokens = int(input)
+					}
+				}
+			}
+
+		case "content_block_start":
+			if index, ok := event["index"].(float64); ok {
+				idx := int(index)
+				if block, ok := event["content_block"].(map[string]any); ok {
+					contentBlocks[idx] = block
+				}
+			}
+
+		case "content_block_delta":
+			if index, ok := event["index"].(float64); ok {
+				idx := int(index)
+				if delta, ok := event["delta"].(map[string]any); ok {
+					if block, exists := contentBlocks[idx]; exists {
+						// Append text delta
+						if deltaType, ok := delta["type"].(string); ok && deltaType == "text_delta" {
+							if text, ok := delta["text"].(string); ok {
+								if existingText, ok := block["text"].(string); ok {
+									block["text"] = existingText + text
+								} else {
+									block["text"] = text
+								}
+							}
+						}
+						// Handle thinking delta
+						if deltaType, ok := delta["type"].(string); ok && deltaType == "thinking_delta" {
+							if thinking, ok := delta["thinking"].(string); ok {
+								if existingThinking, ok := block["thinking"].(string); ok {
+									block["thinking"] = existingThinking + thinking
+								} else {
+									block["thinking"] = thinking
+								}
+							}
+						}
+					}
+				}
+			}
+
+		case "message_delta":
+			if delta, ok := event["delta"].(map[string]any); ok {
+				if stopReason, ok := delta["stop_reason"].(string); ok {
+					response.StopReason = stopReason
+				}
+				if stopSeq, ok := delta["stop_sequence"].(string); ok {
+					response.StopSequence = stopSeq
+				}
+			}
+			if usage, ok := event["usage"].(map[string]any); ok {
+				if output, ok := usage["output_tokens"].(float64); ok {
+					response.Usage.OutputTokens = int(output)
+				}
+			}
+
+		case "message_stop":
+			sawMessageStop = true
+
+		case "error":
+			if errObj, ok := event["error"].(map[string]any); ok {
+				if msg, ok := errObj["message"].(string); ok && msg != "" {
+					return fmt.Errorf("upstream sent error event: %s", msg)
+				}
+				if typ, ok := errObj["type"].(string); ok && typ != "" {
+					return fmt.Errorf("upstream sent error event: %s", typ)
+				}
+			}
+			return fmt.Errorf("upstream sent error event: %s", truncateString(data, 200))
+		}
+
+		return nil
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// End of event.
+		if line == "" {
+			if err := flushEvent(); err != nil {
+				return nil, err
+			}
+			if sawMessageStop {
+				break
+			}
+			currentEventType = ""
+			continue
+		}
+
+		// Comment line.
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+
+		// Parse event type.
+		if strings.HasPrefix(line, "event:") {
+			currentEventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			continue
+		}
+
+		// Parse data.
+		if strings.HasPrefix(line, "data:") {
+			data := strings.TrimPrefix(line, "data:")
+			data = strings.TrimPrefix(data, " ")
+			if dataBuilder.Len() > 0 {
+				dataBuilder.WriteByte('\n')
+			}
+			dataBuilder.WriteString(data)
+			continue
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if err := flushEvent(); err != nil {
+		return nil, err
+	}
+
+	// Build final content array from content blocks
+	indexes := make([]int, 0, len(contentBlocks))
+	for idx := range contentBlocks {
+		indexes = append(indexes, idx)
+	}
+	sort.Ints(indexes)
+	for _, idx := range indexes {
+		response.Content = append(response.Content, contentBlocks[idx])
+	}
+
+	return json.Marshal(response)
 }

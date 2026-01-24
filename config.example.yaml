@@ -14,6 +14,9 @@ upstreams:
     base_url: "https://runanytime.hxi.me"
     token: "sk-"
     weight: 10
+    # If this upstream only supports streaming responses, enable this to force stream=true upstream.
+    # The proxy will convert the SSE stream back into a single JSON response for non-stream clients.
+    must_stream: false
     # Model name mappings for this upstream
     # Key: client model name, Value: upstream model name
     model_mappings:
