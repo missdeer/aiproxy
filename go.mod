@@ -1,5 +1,5 @@
 module github.com/missdeer/aiproxy
 
-go 1.25.3
+go 1.23
 
 require gopkg.in/yaml.v3 v3.0.1
