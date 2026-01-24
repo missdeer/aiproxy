@@ -1,0 +1,94 @@
+# AI Proxy Configuration Example
+
+# Server bind address (default: 127.0.0.1, use 0.0.0.0 to listen on all interfaces)
+bind: "127.0.0.1"
+
+# Server listen port
+listen: ":8642"
+
+# Upstream services configuration
+# Requests are load-balanced using weighted round-robin
+# On 4xx/5xx errors, the next upstream is automatically tried
+upstreams:
+  - name: "runanytime"
+    base_url: "https://runanytime.hxi.me"
+    token: "sk-"
+    weight: 10
+    # Model name mappings for this upstream
+    # Key: client model name, Value: upstream model name
+    model_mappings:
+      "claude-4-5-haiku": "claude-haiku-4-5-20251001"
+      "claude-4-5-haiku-thinking": "claude-haiku-4-5-20251001-thinking"
+      "claude-4-5-opus": "claude-opus-4-5-20251101"
+      "claude-4-5-opus-thinking": "claude-opus-4-5-20251101-thinking"
+      "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
+      "claude-4-5-sonnet-thinking": "claude-sonnet-4-5-20250929-thinking"
+    # Available models (client model names, i.e., keys in model_mappings)
+    # Only requests for these models will be routed to this upstream
+    # If not specified, all models are accepted
+    available_models:
+      - "claude-4-5-haiku"
+      - "claude-4-5-haiku-thinking"
+      - "claude-4-5-sonnet"
+      - "claude-4-5-sonnet-thinking"
+      - "claude-4-5-opus"
+      - "claude-4-5-opus-thinking"
+
+  - name: "HotaruAPI"
+    base_url: "https://api.hotaruapi.top"
+    token: "sk-"
+    weight: 5
+    model_mappings:
+      "claude-4-5-haiku": "claude-haiku-4-5-20251001"
+      "claude-4-5-opus": "claude-opus-4-5-20251101"
+      "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
+      "claude-4-5-sonnet-thinking": "claude-sonnet-4-5-20250929-thinking"
+    available_models:
+      - "claude-4-5-haiku"
+      - "claude-4-5-sonnet"
+      - "claude-4-5-sonnet-thinking"
+      - "claude-4-5-opus"
+
+  - name: "Nyxar API"
+    base_url: "https://api.nyxar.org"
+    token: "sk-"
+    weight: 5
+    model_mappings:
+      "claude-4-5-haiku": "claude-haiku-4-5-20251001"
+      "claude-4-5-opus": "claude-opus-4-5-20251101"
+      "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
+    available_models:
+      - "claude-4-5-haiku"
+      - "claude-4-5-sonnet"
+      - "claude-4-5-opus"
+      
+  - name: "Huan API"
+    base_url: "https://ai.huan666.de"
+    token: "sk-"
+    weight: 1
+    model_mappings:
+      "claude-4-5-haiku": "claude-haiku-4-5-20251001"
+      "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
+    available_models:
+      - "claude-4-5-haiku"
+      - "claude-4-5-sonnet"
+
+  - name: "123nhh"
+    base_url: "https://new.123nhh.xyz"
+    token: "sk-"
+    weight: 1
+    model_mappings:
+      "claude-4-5-opus-thinking": "gemini-claude-opus-4-5-thinking"
+      "claude-4-5-sonnet": "gemini-claude-sonnet-4-5"
+    available_models:
+      - "claude-4-5-opus-thinking"
+      - "claude-4-5-sonnet"
+      
+  - name: "鸢北的公益站"
+    base_url: "https://api.nlvps.hidns.co"
+    token: "sk-"
+    weight: 10
+    model_mappings:
+      "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
+    available_models:
+      - "claude-4-5-sonnet"
