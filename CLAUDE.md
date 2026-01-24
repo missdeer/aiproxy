@@ -42,6 +42,18 @@ proxy/handler.go         # HTTP handler, request forwarding, retry logic
 ## Configuration
 
 See `config.example.yaml` for full example. Key fields:
-- `listen`: Server address (default `:8080`)
-- `model_mappings`: Map incoming model names to different names
-- `upstreams`: List of upstream services with `base_url`, `token`, `model` (override), `weight`
+- `bind`: Bind address (default `127.0.0.1`, use `0.0.0.0` for all interfaces)
+- `listen`: Listen port (default `:8080`)
+- `upstreams`: List of upstream services, each with:
+  - `base_url`: Upstream API endpoint
+  - `token`: Authentication token
+  - `weight`: Load balancing weight
+  - `model_mappings`: Map client model names to upstream model names
+  - `available_models`: List of client model names this upstream supports (optional)
+
+## Features
+
+- **Per-upstream model mapping**: Each upstream can map client model names to its own model names
+- **Model filtering**: Only route requests to upstreams that support the requested model
+- **Circuit breaker**: Upstream marked unavailable after 3 consecutive failures, auto-recovers after 30 minutes
+- **Detailed logging**: Logs include prompt preview, model mapping, upstream selection, and error responses
