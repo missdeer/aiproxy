@@ -89,9 +89,10 @@ The proxy will:
 2. **Model Filtering** - Proxy filters upstreams that support the requested model
 3. **Load Balancing** - Weighted round-robin selects the next upstream
 4. **Model Mapping** - Client model name is mapped to upstream-specific model name
-5. **Request Forwarding** - Request is sent to the selected upstream
-6. **Automatic Retry** - On 4xx/5xx errors, automatically tries the next upstream
-7. **Circuit Breaking** - After 3 consecutive failures, upstream is marked unavailable for 30 minutes
+5. **Must-Stream Handling** - If upstream requires streaming, force `stream=true` and convert response back
+6. **Request Forwarding** - Request is sent to the selected upstream
+7. **Automatic Retry** - On 4xx/5xx errors, automatically tries the next upstream
+8. **Circuit Breaking** - After 3 consecutive failures, upstream is marked unavailable for 30 minutes
 
 ## License
 

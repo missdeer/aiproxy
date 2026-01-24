@@ -50,6 +50,7 @@ See `config.example.yaml` for full example. Key fields:
   - `weight`: Load balancing weight
   - `model_mappings`: Map client model names to upstream model names
   - `available_models`: List of client model names this upstream supports (optional)
+  - `must_stream`: Force streaming to upstream, convert back to JSON for non-stream clients (optional)
 
 ## Features
 
@@ -57,3 +58,4 @@ See `config.example.yaml` for full example. Key fields:
 - **Model filtering**: Only route requests to upstreams that support the requested model
 - **Circuit breaker**: Upstream marked unavailable after 3 consecutive failures, auto-recovers after 30 minutes
 - **Detailed logging**: Logs include prompt preview, model mapping, upstream selection, and error responses
+- **Must-stream conversion**: Force streaming requests to upstreams that only support streaming, automatically convert SSE responses back to JSON for non-streaming clients
