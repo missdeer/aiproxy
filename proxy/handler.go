@@ -223,13 +223,19 @@ func (h *Handler) forwardRequest(upstream config.Upstream, model string, origina
 		return 0, nil, nil, err
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", upstream.Token)
-	req.Header.Set("anthropic-version", originalReq.Header.Get("anthropic-version"))
-
-	if av := originalReq.Header.Get("anthropic-beta"); av != "" {
-		req.Header.Set("anthropic-beta", av)
+	// Copy all headers from original request
+	for k, vv := range originalReq.Header {
+		for _, v := range vv {
+			req.Header.Add(k, v)
+		}
 	}
+
+	// Remove hop-by-hop headers that should not be forwarded
+	stripHopByHopHeaders(req.Header)
+
+	// Only override headers that must be changed
+	req.Header.Set("x-api-key", upstream.Token)
+	req.Header.Del("Content-Length") // Will be set automatically by http.Client
 
 	resp, err := h.client.Do(req)
 	if err != nil {
