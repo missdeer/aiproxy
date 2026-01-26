@@ -35,9 +35,23 @@ func NewWeightedRoundRobin(upstreams []config.Upstream) *WeightedRoundRobin {
 		}
 	}
 
-	weights := make([]int, len(upstreams))
+	// Filter out disabled upstreams
+	var enabledUpstreams []config.Upstream
+	for _, u := range upstreams {
+		if u.IsEnabled() {
+			enabledUpstreams = append(enabledUpstreams, u)
+		}
+	}
+
+	if len(enabledUpstreams) == 0 {
+		return &WeightedRoundRobin{
+			states: make(map[string]*upstreamState),
+		}
+	}
+
+	weights := make([]int, len(enabledUpstreams))
 	maxWeight := 0
-	for i, u := range upstreams {
+	for i, u := range enabledUpstreams {
 		weights[i] = u.Weight
 		if u.Weight > maxWeight {
 			maxWeight = u.Weight
@@ -50,12 +64,12 @@ func NewWeightedRoundRobin(upstreams []config.Upstream) *WeightedRoundRobin {
 	}
 
 	states := make(map[string]*upstreamState)
-	for _, u := range upstreams {
+	for _, u := range enabledUpstreams {
 		states[u.Name] = &upstreamState{}
 	}
 
 	return &WeightedRoundRobin{
-		upstreams: upstreams,
+		upstreams: enabledUpstreams,
 		weights:   weights,
 		states:    states,
 		current:   -1,

@@ -190,3 +190,27 @@ func TestUpstreamGetAPIType(t *testing.T) {
 		})
 	}
 }
+
+func TestUpstreamIsEnabled(t *testing.T) {
+	trueVal := true
+	falseVal := false
+
+	tests := []struct {
+		name    string
+		enabled *bool
+		want    bool
+	}{
+		{"nil defaults to true", nil, true},
+		{"explicit true", &trueVal, true},
+		{"explicit false", &falseVal, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := Upstream{Enabled: tt.enabled}
+			if got := upstream.IsEnabled(); got != tt.want {
+				t.Errorf("IsEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

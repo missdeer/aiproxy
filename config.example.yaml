@@ -18,9 +18,11 @@ upstreams:
     base_url: "https://runanytime.hxi.me"
     token: "sk-"
     weight: 10
+    api_type: "anthropic"
+    enabled: false
     # If this upstream only supports streaming responses, enable this to force stream=true upstream.
     # The proxy will convert the SSE stream back into a single JSON response for non-stream clients.
-    must_stream: false
+    must_stream: true
     # Model name mappings for this upstream
     # Key: client model name, Value: upstream model name
     model_mappings:
@@ -45,6 +47,7 @@ upstreams:
     base_url: "https://api.hotaruapi.top"
     token: "sk-"
     weight: 5
+    api_type: "anthropic"
     model_mappings:
       "claude-4-5-haiku": "claude-haiku-4-5-20251001"
       "claude-4-5-opus": "claude-opus-4-5-20251101"
@@ -60,6 +63,7 @@ upstreams:
     base_url: "https://api.nyxar.org"
     token: "sk-"
     weight: 5
+    api_type: "anthropic"
     model_mappings:
       "claude-4-5-haiku": "claude-haiku-4-5-20251001"
       "claude-4-5-opus": "claude-opus-4-5-20251101"
@@ -73,6 +77,7 @@ upstreams:
     base_url: "https://ai.huan666.de"
     token: "sk-"
     weight: 1
+    api_type: "anthropic"
     model_mappings:
       "claude-4-5-haiku": "claude-haiku-4-5-20251001"
       "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
@@ -84,6 +89,7 @@ upstreams:
     base_url: "https://new.123nhh.xyz"
     token: "sk-"
     weight: 1
+    api_type: "anthropic"
     model_mappings:
       "claude-4-5-opus-thinking": "gemini-claude-opus-4-5-thinking"
       "claude-4-5-sonnet": "gemini-claude-sonnet-4-5"
@@ -95,6 +101,7 @@ upstreams:
     base_url: "https://api.nlvps.hidns.co"
     token: "sk-"
     weight: 10
+    api_type: "anthropic"
     model_mappings:
       "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
     available_models:
@@ -106,6 +113,7 @@ upstreams:
     base_url: "https://api.openai.com"
     token: "sk-your-openai-key"
     weight: 5
+    enabled: false
     api_type: "openai"  # Use OpenAI API format (Authorization: Bearer header, /v1/chat/completions endpoint)
     model_mappings:
       "gpt-4": "gpt-4-turbo"
@@ -120,6 +128,7 @@ upstreams:
     base_url: "https://api.openai.com"
     token: "sk-your-openai-key"
     weight: 5
+    enabled: false
     api_type: "responses"  # Use native Responses API format (/v1/responses endpoint)
     model_mappings:
       "gpt-4o": "gpt-4o-2024-11-20"
@@ -132,6 +141,7 @@ upstreams:
     base_url: "https://generativelanguage.googleapis.com"
     token: "your-gemini-api-key"
     weight: 5
+    enabled: false
     api_type: "gemini"  # Use Gemini API format (API key auth, /v1beta/models endpoint)
     model_mappings:
       "gemini-pro": "gemini-1.5-pro"

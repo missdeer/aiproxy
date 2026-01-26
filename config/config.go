@@ -20,6 +20,7 @@ const (
 
 type Upstream struct {
 	Name            string       `yaml:"name"`
+	Enabled         *bool        `yaml:"enabled"` // Whether this upstream is enabled, defaults to true
 	BaseURL         string       `yaml:"base_url"`
 	Token           string       `yaml:"token"`
 	Weight          int          `yaml:"weight"`
@@ -27,6 +28,14 @@ type Upstream struct {
 	AvailableModels []string     `yaml:"available_models"`
 	MustStream      bool         `yaml:"must_stream"`
 	APIType         APIType      `yaml:"api_type"` // "anthropic", "openai", "gemini", or "responses"
+}
+
+// IsEnabled returns whether this upstream is enabled (defaults to true)
+func (u *Upstream) IsEnabled() bool {
+	if u.Enabled == nil {
+		return true
+	}
+	return *u.Enabled
 }
 
 // GetAPIType returns the API type, defaulting to Anthropic
