@@ -212,12 +212,51 @@ func (h *Handler) forwardRequest(upstream config.Upstream, model string, origina
 		log.Printf("[INFO] Forcing stream=true for upstream %s (mustStream enabled)", upstream.Name)
 	}
 
-	modifiedBody, err := json.Marshal(bodyMap)
-	if err != nil {
-		return 0, nil, nil, err
+	apiType := upstream.GetAPIType()
+	var url string
+	var modifiedBody []byte
+	var err error
+
+	// Convert Anthropic request to target API format
+	switch apiType {
+	case config.APITypeAnthropic:
+		// Native Anthropic - no conversion needed
+		modifiedBody, err = json.Marshal(bodyMap)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
+
+	case config.APITypeOpenAI:
+		// Convert Anthropic to OpenAI format
+		openAIBody := convertAnthropicToOpenAIRequest(bodyMap)
+		modifiedBody, err = json.Marshal(openAIBody)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
+
+	case config.APITypeGemini:
+		// Convert Anthropic to Gemini format
+		geminiBody := convertAnthropicToGeminiRequest(bodyMap)
+		modifiedBody, err = json.Marshal(geminiBody)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		action := "generateContent"
+		if clientWantsStream || forceStream {
+			action = "streamGenerateContent"
+		}
+		url = fmt.Sprintf("%s/v1beta/models/%s:%s", strings.TrimSuffix(upstream.BaseURL, "/"), model, action)
+
+	default:
+		modifiedBody, err = json.Marshal(bodyMap)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
 	}
 
-	url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(modifiedBody))
 	if err != nil {
 		return 0, nil, nil, err
@@ -233,8 +272,24 @@ func (h *Handler) forwardRequest(upstream config.Upstream, model string, origina
 	// Remove hop-by-hop headers that should not be forwarded
 	stripHopByHopHeaders(req.Header)
 
-	// Only override headers that must be changed
-	req.Header.Set("x-api-key", upstream.Token)
+	// Set authentication based on API type
+	switch apiType {
+	case config.APITypeAnthropic:
+		req.Header.Set("x-api-key", upstream.Token)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Del("Authorization")
+	case config.APITypeOpenAI:
+		req.Header.Set("Authorization", "Bearer "+upstream.Token)
+		req.Header.Del("x-api-key")
+	case config.APITypeGemini:
+		if !strings.Contains(url, "key=") {
+			url = url + "?key=" + upstream.Token
+			req.URL, _ = req.URL.Parse(url)
+		}
+		req.Header.Del("Authorization")
+		req.Header.Del("x-api-key")
+	}
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Del("Content-Length") // Will be set automatically by http.Client
 
 	resp, err := h.client.Do(req)
@@ -243,13 +298,48 @@ func (h *Handler) forwardRequest(upstream config.Upstream, model string, origina
 	}
 	defer resp.Body.Close()
 
-	// If we forced streaming, we need to convert the SSE response back to non-streaming format
-	if forceStream && resp.StatusCode < 400 {
+	// Handle response conversion back to Anthropic format
+	if resp.StatusCode < 400 && apiType != config.APITypeAnthropic {
+		if clientWantsStream || forceStream {
+			// Convert streaming response to Anthropic format
+			anthropicResp, err := h.convertStreamToAnthropic(resp.Body, apiType, !clientWantsStream)
+			if err != nil {
+				return 0, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
+			}
+			headers := resp.Header.Clone()
+			stripHopByHopHeaders(headers)
+			headers.Del("Content-Length")
+			headers.Del("Content-Encoding")
+			if clientWantsStream {
+				headers.Set("Content-Type", "text/event-stream")
+			} else {
+				headers.Set("Content-Type", "application/json")
+			}
+			return resp.StatusCode, anthropicResp, headers, nil
+		} else {
+			// Convert non-streaming response to Anthropic format
+			respBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			anthropicResp, err := convertResponseToAnthropic(respBody, apiType)
+			if err != nil {
+				return 0, nil, nil, fmt.Errorf("failed to convert response: %w", err)
+			}
+			headers := resp.Header.Clone()
+			stripHopByHopHeaders(headers)
+			headers.Del("Content-Length")
+			headers.Set("Content-Type", "application/json")
+			return resp.StatusCode, anthropicResp, headers, nil
+		}
+	}
+
+	// If we forced streaming for Anthropic upstream, convert back to non-streaming
+	if forceStream && resp.StatusCode < 400 && apiType == config.APITypeAnthropic {
 		nonStreamResp, err := h.convertStreamToNonStream(resp.Body)
 		if err != nil {
 			return 0, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
 		}
-		// Preserve upstream headers (e.g., request IDs / rate limits), but fix content headers.
 		headers := resp.Header.Clone()
 		stripHopByHopHeaders(headers)
 		headers.Del("Content-Length")

@@ -24,8 +24,15 @@ func main() {
 	}
 
 	handler := proxy.NewHandler(cfg)
+	openaiHandler := proxy.NewOpenAIHandler(cfg)
+	responsesHandler := proxy.NewResponsesHandler(cfg)
+	geminiHandler := proxy.NewGeminiCompatHandler(cfg)
 
 	http.Handle("/v1/messages", handler)
+	http.Handle("/v1/chat/completions", openaiHandler)
+	http.Handle("/v1/responses", responsesHandler)
+	http.Handle("/v1beta/models/", geminiHandler)
+	http.Handle("/v1/models/", geminiHandler)
 
 	addr := cfg.Bind + cfg.Listen
 	log.Printf("Starting proxy server on %s", addr)

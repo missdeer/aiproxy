@@ -95,3 +95,43 @@ upstreams:
       "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
     available_models:
       - "claude-4-5-sonnet"
+
+  # Example OpenAI-compatible upstream
+  # Use api_type: "openai" for OpenAI-compatible services
+  - name: "OpenAI Compatible"
+    base_url: "https://api.openai.com"
+    token: "sk-your-openai-key"
+    weight: 5
+    api_type: "openai"  # Use OpenAI API format (Authorization: Bearer header, /v1/chat/completions endpoint)
+    model_mappings:
+      "gpt-4": "gpt-4-turbo"
+      "gpt-4o": "gpt-4o-2024-11-20"
+    available_models:
+      - "gpt-4"
+      - "gpt-4o"
+
+  # Example OpenAI upstream with native Responses API support
+  - name: "OpenAI Responses"
+    base_url: "https://api.openai.com"
+    token: "sk-your-openai-key"
+    weight: 5
+    api_type: "openai"
+    supports_responses: true  # Enable native /v1/responses endpoint support
+    model_mappings:
+      "gpt-4o": "gpt-4o-2024-11-20"
+    available_models:
+      - "gpt-4o"
+
+  # Example Gemini upstream
+  # Use api_type: "gemini" for Google Gemini API
+  - name: "Google Gemini"
+    base_url: "https://generativelanguage.googleapis.com"
+    token: "your-gemini-api-key"
+    weight: 5
+    api_type: "gemini"  # Use Gemini API format (API key auth, /v1beta/models endpoint)
+    model_mappings:
+      "gemini-pro": "gemini-1.5-pro"
+      "gemini-flash": "gemini-1.5-flash"
+    available_models:
+      - "gemini-pro"
+      - "gemini-flash"

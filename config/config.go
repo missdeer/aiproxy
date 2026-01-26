@@ -8,14 +8,38 @@ import (
 
 type ModelMapping map[string]string
 
+// APIType represents the type of API protocol
+type APIType string
+
+const (
+	APITypeAnthropic APIType = "anthropic"
+	APITypeOpenAI    APIType = "openai"
+	APITypeGemini    APIType = "gemini"
+)
+
 type Upstream struct {
-	Name            string       `yaml:"name"`
-	BaseURL         string       `yaml:"base_url"`
-	Token           string       `yaml:"token"`
-	Weight          int          `yaml:"weight"`
-	ModelMappings   ModelMapping `yaml:"model_mappings"`
-	AvailableModels []string     `yaml:"available_models"`
-	MustStream      bool         `yaml:"must_stream"`
+	Name               string       `yaml:"name"`
+	BaseURL            string       `yaml:"base_url"`
+	Token              string       `yaml:"token"`
+	Weight             int          `yaml:"weight"`
+	ModelMappings      ModelMapping `yaml:"model_mappings"`
+	AvailableModels    []string     `yaml:"available_models"`
+	MustStream         bool         `yaml:"must_stream"`
+	APIType            APIType      `yaml:"api_type"`              // "anthropic" or "openai", defaults to "anthropic"
+	SupportsResponses  bool         `yaml:"supports_responses"`    // Whether upstream supports /v1/responses natively
+}
+
+// GetAPIType returns the API type, defaulting to Anthropic
+func (u *Upstream) GetAPIType() APIType {
+	if u.APIType == "" {
+		return APITypeAnthropic
+	}
+	return u.APIType
+}
+
+// SupportsResponsesAPI returns whether the upstream supports Responses API natively
+func (u *Upstream) SupportsResponsesAPI() bool {
+	return u.SupportsResponses
 }
 
 func (u *Upstream) MapModel(model string) string {
