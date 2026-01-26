@@ -6,6 +6,10 @@ bind: "127.0.0.1"
 # Server listen port
 listen: ":8642"
 
+# Default max_tokens value for requests that don't specify one (default: 4096)
+# This is used when converting requests to APIs that require max_tokens (e.g., Anthropic)
+default_max_tokens: 4096
+
 # Upstream services configuration
 # Requests are load-balanced using weighted round-robin
 # On 4xx/5xx errors, the next upstream is automatically tried
@@ -111,12 +115,12 @@ upstreams:
       - "gpt-4o"
 
   # Example OpenAI upstream with native Responses API support
+  # Use api_type: "responses" for native /v1/responses endpoint
   - name: "OpenAI Responses"
     base_url: "https://api.openai.com"
     token: "sk-your-openai-key"
     weight: 5
-    api_type: "openai"
-    supports_responses: true  # Enable native /v1/responses endpoint support
+    api_type: "responses"  # Use native Responses API format (/v1/responses endpoint)
     model_mappings:
       "gpt-4o": "gpt-4o-2024-11-20"
     available_models:

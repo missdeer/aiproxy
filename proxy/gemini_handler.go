@@ -32,9 +32,9 @@ func NewGeminiHandler(cfg *config.Config) *GeminiHandler {
 
 // Gemini API types
 type GeminiRequest struct {
-	Contents         []GeminiContent    `json:"contents"`
-	SystemInstruction *GeminiContent    `json:"systemInstruction,omitempty"`
-	GenerationConfig *GeminiGenConfig   `json:"generationConfig,omitempty"`
+	Contents          []GeminiContent  `json:"contents"`
+	SystemInstruction *GeminiContent   `json:"systemInstruction,omitempty"`
+	GenerationConfig  *GeminiGenConfig `json:"generationConfig,omitempty"`
 }
 
 type GeminiContent struct {
@@ -43,7 +43,7 @@ type GeminiContent struct {
 }
 
 type GeminiPart struct {
-	Text       string          `json:"text,omitempty"`
+	Text       string            `json:"text,omitempty"`
 	InlineData *GeminiInlineData `json:"inlineData,omitempty"`
 }
 
@@ -246,7 +246,7 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 
 	case config.APITypeAnthropic:
 		// Convert to Anthropic format
-		bodyMap = convertGeminiToAnthropicRequest(bodyMap)
+		bodyMap = convertGeminiToAnthropicRequest(bodyMap, h.cfg.DefaultMaxTokens)
 		bodyMap["model"] = model
 		if isStream {
 			bodyMap["stream"] = true
@@ -269,6 +269,19 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 			return 0, nil, nil, err
 		}
 		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
+
+	case config.APITypeResponses:
+		// Convert to Responses format
+		bodyMap = convertGeminiToResponsesRequest(bodyMap)
+		bodyMap["model"] = model
+		if isStream {
+			bodyMap["stream"] = true
+		}
+		modifiedBody, err = json.Marshal(bodyMap)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
 
 	default:
 		return 0, nil, nil, fmt.Errorf("unsupported API type: %s", apiType)
@@ -301,7 +314,7 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 		req.Header.Set("x-api-key", upstream.Token)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Del("Authorization")
-	case config.APITypeOpenAI:
+	case config.APITypeOpenAI, config.APITypeResponses:
 		req.Header.Set("Authorization", "Bearer "+upstream.Token)
 		req.Header.Del("x-api-key")
 	}
@@ -387,7 +400,7 @@ func extractGeminiPromptPreview(contents []GeminiContent) string {
 }
 
 // convertGeminiToAnthropicRequest converts Gemini request to Anthropic format
-func convertGeminiToAnthropicRequest(req map[string]any) map[string]any {
+func convertGeminiToAnthropicRequest(req map[string]any, defaultMaxTokens int) map[string]any {
 	anthropicReq := make(map[string]any)
 
 	// Convert contents to messages
@@ -475,13 +488,13 @@ func convertGeminiToAnthropicRequest(req map[string]any) map[string]any {
 		if maxTokens, ok := genConfig["maxOutputTokens"]; ok {
 			anthropicReq["max_tokens"] = maxTokens
 		} else {
-			anthropicReq["max_tokens"] = 4096
+			anthropicReq["max_tokens"] = defaultMaxTokens
 		}
 		if stopSeqs, ok := genConfig["stopSequences"]; ok {
 			anthropicReq["stop_sequences"] = stopSeqs
 		}
 	} else {
-		anthropicReq["max_tokens"] = 4096
+		anthropicReq["max_tokens"] = defaultMaxTokens
 	}
 
 	return anthropicReq

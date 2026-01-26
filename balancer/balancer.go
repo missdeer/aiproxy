@@ -8,13 +8,13 @@ import (
 )
 
 const (
-	maxFailures     = 3
-	cooldownPeriod  = 30 * time.Minute
+	maxFailures    = 3
+	cooldownPeriod = 30 * time.Minute
 )
 
 type upstreamState struct {
-	failures    int
-	unavailable bool
+	failures      int
+	unavailable   bool
 	unavailableAt time.Time
 }
 

@@ -33,13 +33,13 @@ func NewOpenAIHandler(cfg *config.Config) *OpenAIHandler {
 
 // OpenAI request/response types
 type OpenAIChatRequest struct {
-	Model       string         `json:"model"`
+	Model       string          `json:"model"`
 	Messages    []OpenAIMessage `json:"messages"`
-	Stream      bool           `json:"stream,omitempty"`
-	MaxTokens   int            `json:"max_tokens,omitempty"`
-	Temperature float64        `json:"temperature,omitempty"`
-	TopP        float64        `json:"top_p,omitempty"`
-	Stop        any            `json:"stop,omitempty"`
+	Stream      bool            `json:"stream,omitempty"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+	Temperature float64         `json:"temperature,omitempty"`
+	TopP        float64         `json:"top_p,omitempty"`
+	Stop        any             `json:"stop,omitempty"`
 }
 
 type OpenAIMessage struct {
@@ -57,10 +57,10 @@ type OpenAIChatResponse struct {
 }
 
 type OpenAIChoice struct {
-	Index        int           `json:"index"`
+	Index        int            `json:"index"`
 	Message      *OpenAIMessage `json:"message,omitempty"`
 	Delta        *OpenAIMessage `json:"delta,omitempty"`
-	FinishReason *string       `json:"finish_reason"`
+	FinishReason *string        `json:"finish_reason"`
 }
 
 type OpenAIUsage struct {
@@ -226,6 +226,15 @@ func (h *OpenAIHandler) forwardRequest(upstream config.Upstream, model string, o
 		}
 		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
 
+	case config.APITypeResponses:
+		// Convert OpenAI chat to Responses format
+		responsesBody := convertOpenAIChatToResponsesRequest(bodyMap)
+		modifiedBody, err = json.Marshal(responsesBody)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
+
 	case config.APITypeAnthropic:
 		// Convert OpenAI to Anthropic format
 		anthropicBody := convertOpenAIChatToAnthropicRequest(bodyMap)
@@ -276,7 +285,7 @@ func (h *OpenAIHandler) forwardRequest(upstream config.Upstream, model string, o
 		req.Header.Set("x-api-key", upstream.Token)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Del("Authorization")
-	case config.APITypeOpenAI:
+	case config.APITypeOpenAI, config.APITypeResponses:
 		req.Header.Set("Authorization", "Bearer "+upstream.Token)
 		req.Header.Del("x-api-key")
 	case config.APITypeGemini:
@@ -297,7 +306,25 @@ func (h *OpenAIHandler) forwardRequest(upstream config.Upstream, model string, o
 	defer resp.Body.Close()
 
 	// Handle response conversion back to OpenAI format
+	// APITypeOpenAI doesn't need conversion
+	// APITypeResponses needs conversion from Responses API format to OpenAI chat format
 	if resp.StatusCode < 400 && apiType != config.APITypeOpenAI {
+		if apiType == config.APITypeResponses {
+			// Convert Responses API response to OpenAI chat format
+			respBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			openAIResp, err := convertResponsesToOpenAIChat(respBody)
+			if err != nil {
+				return 0, nil, nil, fmt.Errorf("failed to convert responses to openai: %w", err)
+			}
+			headers := resp.Header.Clone()
+			stripHopByHopHeaders(headers)
+			headers.Del("Content-Length")
+			headers.Set("Content-Type", "application/json")
+			return resp.StatusCode, openAIResp, headers, nil
+		}
 		if clientWantsStream || forceStream {
 			// Convert streaming response to OpenAI format
 			openAIResp, err := h.convertStreamToOpenAI(resp.Body, apiType, !clientWantsStream)
@@ -671,135 +698,6 @@ func extractOpenAIPromptPreview(messages []OpenAIMessage) string {
 	return "(unknown format)"
 }
 
-// convertOpenAIToAnthropicRequest converts OpenAI chat request to Anthropic messages format
-func convertOpenAIToAnthropicRequest(openAIReq map[string]any) map[string]any {
-	anthropicReq := make(map[string]any)
-
-	// Copy model
-	if model, ok := openAIReq["model"]; ok {
-		anthropicReq["model"] = model
-	}
-
-	// Convert max_tokens
-	if maxTokens, ok := openAIReq["max_tokens"]; ok {
-		anthropicReq["max_tokens"] = maxTokens
-	} else {
-		anthropicReq["max_tokens"] = 4096 // Default for Anthropic
-	}
-
-	// Copy optional parameters
-	if temp, ok := openAIReq["temperature"]; ok {
-		anthropicReq["temperature"] = temp
-	}
-	if topP, ok := openAIReq["top_p"]; ok {
-		anthropicReq["top_p"] = topP
-	}
-	if stop, ok := openAIReq["stop"]; ok {
-		anthropicReq["stop_sequences"] = stop
-	}
-	if stream, ok := openAIReq["stream"]; ok {
-		anthropicReq["stream"] = stream
-	}
-
-	// Convert messages
-	messages, ok := openAIReq["messages"].([]any)
-	if !ok {
-		return anthropicReq
-	}
-
-	var anthropicMessages []map[string]any
-	var systemContent string
-
-	for _, msg := range messages {
-		msgMap, ok := msg.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		role, _ := msgMap["role"].(string)
-		content := msgMap["content"]
-
-		// Extract system message
-		if role == "system" {
-			if s, ok := content.(string); ok {
-				if systemContent != "" {
-					systemContent += "\n"
-				}
-				systemContent += s
-			}
-			continue
-		}
-
-		// Convert role names
-		anthropicRole := role
-		if role == "assistant" {
-			anthropicRole = "assistant"
-		} else if role == "user" {
-			anthropicRole = "user"
-		}
-
-		// Convert content format
-		var anthropicContent any
-		switch c := content.(type) {
-		case string:
-			anthropicContent = c
-		case []any:
-			// Convert content parts
-			var parts []map[string]any
-			for _, part := range c {
-				if partMap, ok := part.(map[string]any); ok {
-					partType, _ := partMap["type"].(string)
-					if partType == "text" {
-						parts = append(parts, map[string]any{
-							"type": "text",
-							"text": partMap["text"],
-						})
-					} else if partType == "image_url" {
-						if imageURL, ok := partMap["image_url"].(map[string]any); ok {
-							if url, ok := imageURL["url"].(string); ok {
-								// Handle base64 images
-								if strings.HasPrefix(url, "data:") {
-									urlParts := strings.SplitN(url, ",", 2)
-									if len(urlParts) == 2 {
-										mediaType := strings.TrimPrefix(strings.Split(urlParts[0], ";")[0], "data:")
-										parts = append(parts, map[string]any{
-											"type": "image",
-											"source": map[string]any{
-												"type":       "base64",
-												"media_type": mediaType,
-												"data":       urlParts[1],
-											},
-										})
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			if len(parts) > 0 {
-				anthropicContent = parts
-			} else {
-				anthropicContent = c
-			}
-		default:
-			anthropicContent = content
-		}
-
-		anthropicMessages = append(anthropicMessages, map[string]any{
-			"role":    anthropicRole,
-			"content": anthropicContent,
-		})
-	}
-
-	anthropicReq["messages"] = anthropicMessages
-	if systemContent != "" {
-		anthropicReq["system"] = systemContent
-	}
-
-	return anthropicReq
-}
-
 // convertAnthropicToOpenAIResponse converts Anthropic response to OpenAI format
 func convertAnthropicToOpenAIResponse(anthropicBody []byte) ([]byte, error) {
 	var anthropicResp struct {
@@ -858,223 +756,6 @@ func convertAnthropicToOpenAIResponse(anthropicBody []byte) ([]byte, error) {
 			PromptTokens:     anthropicResp.Usage.InputTokens,
 			CompletionTokens: anthropicResp.Usage.OutputTokens,
 			TotalTokens:      anthropicResp.Usage.InputTokens + anthropicResp.Usage.OutputTokens,
-		},
-	}
-
-	return json.Marshal(openAIResp)
-}
-
-// convertAnthropicStreamToOpenAI converts Anthropic SSE stream to OpenAI SSE format
-func (h *OpenAIHandler) convertAnthropicStreamToOpenAI(reader io.Reader, clientWantsStream bool) ([]byte, error) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-
-	var (
-		messageID        string
-		model            string
-		inputTokens      int
-		outputTokens     int
-		currentEventType string
-		dataBuilder      strings.Builder
-		textContent      strings.Builder
-		stopReason       string
-		chunks           []byte
-	)
-
-	flushEvent := func() error {
-		if dataBuilder.Len() == 0 {
-			return nil
-		}
-		data := strings.TrimSpace(dataBuilder.String())
-		dataBuilder.Reset()
-
-		if data == "" || data == "[DONE]" {
-			return nil
-		}
-
-		var event map[string]any
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return nil // Skip invalid JSON
-		}
-
-		eventType := currentEventType
-		if eventType == "" {
-			if t, ok := event["type"].(string); ok {
-				eventType = t
-			}
-		}
-
-		switch eventType {
-		case "message_start":
-			if msg, ok := event["message"].(map[string]any); ok {
-				if id, ok := msg["id"].(string); ok {
-					messageID = id
-				}
-				if m, ok := msg["model"].(string); ok {
-					model = m
-				}
-				if usage, ok := msg["usage"].(map[string]any); ok {
-					if input, ok := usage["input_tokens"].(float64); ok {
-						inputTokens = int(input)
-					}
-				}
-			}
-			if clientWantsStream {
-				// Send initial chunk
-				chunk := OpenAIStreamChunk{
-					ID:      "chatcmpl-" + messageID,
-					Object:  "chat.completion.chunk",
-					Created: time.Now().Unix(),
-					Model:   model,
-					Choices: []OpenAIChoice{
-						{
-							Index: 0,
-							Delta: &OpenAIMessage{
-								Role: "assistant",
-							},
-							FinishReason: nil,
-						},
-					},
-				}
-				chunkBytes, _ := json.Marshal(chunk)
-				chunks = append(chunks, []byte("data: ")...)
-				chunks = append(chunks, chunkBytes...)
-				chunks = append(chunks, []byte("\n\n")...)
-			}
-
-		case "content_block_delta":
-			if delta, ok := event["delta"].(map[string]any); ok {
-				if deltaType, ok := delta["type"].(string); ok && deltaType == "text_delta" {
-					if text, ok := delta["text"].(string); ok {
-						textContent.WriteString(text)
-						if clientWantsStream {
-							chunk := OpenAIStreamChunk{
-								ID:      "chatcmpl-" + messageID,
-								Object:  "chat.completion.chunk",
-								Created: time.Now().Unix(),
-								Model:   model,
-								Choices: []OpenAIChoice{
-									{
-										Index: 0,
-										Delta: &OpenAIMessage{
-											Content: text,
-										},
-										FinishReason: nil,
-									},
-								},
-							}
-							chunkBytes, _ := json.Marshal(chunk)
-							chunks = append(chunks, []byte("data: ")...)
-							chunks = append(chunks, chunkBytes...)
-							chunks = append(chunks, []byte("\n\n")...)
-						}
-					}
-				}
-			}
-
-		case "message_delta":
-			if delta, ok := event["delta"].(map[string]any); ok {
-				if sr, ok := delta["stop_reason"].(string); ok {
-					stopReason = sr
-				}
-			}
-			if usage, ok := event["usage"].(map[string]any); ok {
-				if output, ok := usage["output_tokens"].(float64); ok {
-					outputTokens = int(output)
-				}
-			}
-
-		case "message_stop":
-			if clientWantsStream {
-				// Send final chunk with finish_reason
-				reason := mapAnthropicStopReason(stopReason)
-				chunk := OpenAIStreamChunk{
-					ID:      "chatcmpl-" + messageID,
-					Object:  "chat.completion.chunk",
-					Created: time.Now().Unix(),
-					Model:   model,
-					Choices: []OpenAIChoice{
-						{
-							Index:        0,
-							Delta:        &OpenAIMessage{},
-							FinishReason: &reason,
-						},
-					},
-				}
-				chunkBytes, _ := json.Marshal(chunk)
-				chunks = append(chunks, []byte("data: ")...)
-				chunks = append(chunks, chunkBytes...)
-				chunks = append(chunks, []byte("\n\n")...)
-				chunks = append(chunks, []byte("data: [DONE]\n\n")...)
-			}
-		}
-
-		return nil
-	}
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if line == "" {
-			flushEvent()
-			currentEventType = ""
-			continue
-		}
-
-		if strings.HasPrefix(line, ":") {
-			continue
-		}
-
-		if strings.HasPrefix(line, "event:") {
-			currentEventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-			continue
-		}
-
-		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimPrefix(line, "data:")
-			data = strings.TrimPrefix(data, " ")
-			if dataBuilder.Len() > 0 {
-				dataBuilder.WriteByte('\n')
-			}
-			dataBuilder.WriteString(data)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	flushEvent()
-
-	if clientWantsStream {
-		return chunks, nil
-	}
-
-	// Return non-streaming response
-	var finishReason *string
-	if stopReason != "" {
-		reason := mapAnthropicStopReason(stopReason)
-		finishReason = &reason
-	}
-
-	openAIResp := OpenAIChatResponse{
-		ID:      "chatcmpl-" + messageID,
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   model,
-		Choices: []OpenAIChoice{
-			{
-				Index: 0,
-				Message: &OpenAIMessage{
-					Role:    "assistant",
-					Content: textContent.String(),
-				},
-				FinishReason: finishReason,
-			},
-		},
-		Usage: OpenAIUsage{
-			PromptTokens:     inputTokens,
-			CompletionTokens: outputTokens,
-			TotalTokens:      inputTokens + outputTokens,
 		},
 	}
 

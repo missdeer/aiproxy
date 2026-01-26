@@ -236,6 +236,15 @@ func (h *Handler) forwardRequest(upstream config.Upstream, model string, origina
 		}
 		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
 
+	case config.APITypeResponses:
+		// Convert Anthropic to Responses format
+		responsesBody := convertAnthropicToResponsesRequest(bodyMap)
+		modifiedBody, err = json.Marshal(responsesBody)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
+
 	case config.APITypeGemini:
 		// Convert Anthropic to Gemini format
 		geminiBody := convertAnthropicToGeminiRequest(bodyMap)
@@ -278,7 +287,7 @@ func (h *Handler) forwardRequest(upstream config.Upstream, model string, origina
 		req.Header.Set("x-api-key", upstream.Token)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Del("Authorization")
-	case config.APITypeOpenAI:
+	case config.APITypeOpenAI, config.APITypeResponses:
 		req.Header.Set("Authorization", "Bearer "+upstream.Token)
 		req.Header.Del("x-api-key")
 	case config.APITypeGemini:

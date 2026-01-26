@@ -262,7 +262,7 @@ func convertAnthropicToResponsesRequest(req map[string]any) map[string]any {
 // ============================================================================
 
 // convertOpenAIChatToAnthropicRequest converts OpenAI chat request to Anthropic format
-func convertOpenAIChatToAnthropicRequest(req map[string]any) map[string]any {
+func convertOpenAIChatToAnthropicRequest(req map[string]any, defaultMaxTokens ...int) map[string]any {
 	anthropicReq := make(map[string]any)
 
 	// Copy model
@@ -274,7 +274,11 @@ func convertOpenAIChatToAnthropicRequest(req map[string]any) map[string]any {
 	if maxTokens, ok := req["max_tokens"]; ok {
 		anthropicReq["max_tokens"] = maxTokens
 	} else {
-		anthropicReq["max_tokens"] = 4096
+		maxTokensDefault := 4096
+		if len(defaultMaxTokens) > 0 && defaultMaxTokens[0] > 0 {
+			maxTokensDefault = defaultMaxTokens[0]
+		}
+		anthropicReq["max_tokens"] = maxTokensDefault
 	}
 
 	// Copy optional parameters
@@ -732,6 +736,69 @@ func convertGeminiToOpenAIResponse(body []byte) ([]byte, error) {
 			PromptTokens:     promptTokens,
 			CompletionTokens: completionTokens,
 			TotalTokens:      promptTokens + completionTokens,
+		},
+	}
+
+	return json.Marshal(openAIResp)
+}
+
+// convertResponsesToOpenAIChat converts Responses API response to OpenAI chat format
+func convertResponsesToOpenAIChat(body []byte) ([]byte, error) {
+	var responsesResp struct {
+		ID        string `json:"id"`
+		Object    string `json:"object"`
+		CreatedAt int64  `json:"created_at"`
+		Model     string `json:"model"`
+		Output    []struct {
+			Type    string `json:"type"`
+			ID      string `json:"id"`
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+			TotalTokens  int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+
+	if err := json.Unmarshal(body, &responsesResp); err != nil {
+		return nil, err
+	}
+
+	// Extract text content from output
+	var textContent string
+	for _, output := range responsesResp.Output {
+		for _, content := range output.Content {
+			if content.Type == "output_text" || content.Type == "text" {
+				textContent += content.Text
+			}
+		}
+	}
+
+	finishReason := "stop"
+	openAIResp := OpenAIChatResponse{
+		ID:      "chatcmpl-" + responsesResp.ID,
+		Object:  "chat.completion",
+		Created: responsesResp.CreatedAt,
+		Model:   responsesResp.Model,
+		Choices: []OpenAIChoice{
+			{
+				Index: 0,
+				Message: &OpenAIMessage{
+					Role:    "assistant",
+					Content: textContent,
+				},
+				FinishReason: &finishReason,
+			},
+		},
+		Usage: OpenAIUsage{
+			PromptTokens:     responsesResp.Usage.InputTokens,
+			CompletionTokens: responsesResp.Usage.OutputTokens,
+			TotalTokens:      responsesResp.Usage.TotalTokens,
 		},
 	}
 

@@ -33,34 +33,34 @@ func NewResponsesHandler(cfg *config.Config) *ResponsesHandler {
 
 // ResponsesRequest represents OpenAI Responses API request
 type ResponsesRequest struct {
-	Model              string `json:"model"`
-	Input              any    `json:"input"` // string or array of input items
-	Instructions       string `json:"instructions,omitempty"`
-	Stream             bool   `json:"stream,omitempty"`
-	MaxOutputTokens    int    `json:"max_output_tokens,omitempty"`
+	Model              string  `json:"model"`
+	Input              any     `json:"input"` // string or array of input items
+	Instructions       string  `json:"instructions,omitempty"`
+	Stream             bool    `json:"stream,omitempty"`
+	MaxOutputTokens    int     `json:"max_output_tokens,omitempty"`
 	Temperature        float64 `json:"temperature,omitempty"`
 	TopP               float64 `json:"top_p,omitempty"`
-	PreviousResponseID string `json:"previous_response_id,omitempty"`
+	PreviousResponseID string  `json:"previous_response_id,omitempty"`
 }
 
 // ResponsesResponse represents OpenAI Responses API response
 type ResponsesResponse struct {
-	ID                 string           `json:"id"`
-	Object             string           `json:"object"`
-	CreatedAt          int64            `json:"created_at"`
-	Model              string           `json:"model"`
-	Output             []ResponseOutput `json:"output"`
-	Usage              ResponsesUsage   `json:"usage,omitempty"`
-	Status             string           `json:"status,omitempty"`
-	Error              *ResponsesError  `json:"error,omitempty"`
+	ID        string           `json:"id"`
+	Object    string           `json:"object"`
+	CreatedAt int64            `json:"created_at"`
+	Model     string           `json:"model"`
+	Output    []ResponseOutput `json:"output"`
+	Usage     ResponsesUsage   `json:"usage,omitempty"`
+	Status    string           `json:"status,omitempty"`
+	Error     *ResponsesError  `json:"error,omitempty"`
 }
 
 type ResponseOutput struct {
-	Type    string `json:"type"`
-	ID      string `json:"id,omitempty"`
-	Role    string `json:"role,omitempty"`
+	Type    string            `json:"type"`
+	ID      string            `json:"id,omitempty"`
+	Role    string            `json:"role,omitempty"`
 	Content []ResponseContent `json:"content,omitempty"`
-	Status  string `json:"status,omitempty"`
+	Status  string            `json:"status,omitempty"`
 }
 
 type ResponseContent struct {
@@ -81,11 +81,11 @@ type ResponsesError struct {
 
 // Streaming event types
 type ResponsesStreamEvent struct {
-	Type     string `json:"type"`
+	Type     string             `json:"type"`
 	Response *ResponsesResponse `json:"response,omitempty"`
-	Item     *ResponseOutput `json:"item,omitempty"`
-	Delta    *ResponsesDelta `json:"delta,omitempty"`
-	Usage    *ResponsesUsage `json:"usage,omitempty"`
+	Item     *ResponseOutput    `json:"item,omitempty"`
+	Delta    *ResponsesDelta    `json:"delta,omitempty"`
+	Usage    *ResponsesUsage    `json:"usage,omitempty"`
 }
 
 type ResponsesDelta struct {
@@ -235,14 +235,21 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 	case config.APITypeAnthropic:
 		bodyMap = convertResponsesToAnthropicRequest(bodyMap)
 		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
-	case config.APITypeOpenAI:
-		// Check if upstream supports Responses API directly or needs conversion to chat/completions
-		if upstream.SupportsResponsesAPI() {
-			url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
-		} else {
-			bodyMap = convertResponsesToChatRequest(bodyMap)
-			url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
+	case config.APITypeGemini:
+		bodyMap = convertResponsesToGeminiRequest(bodyMap)
+		action := "generateContent"
+		if clientWantsStream || forceStream {
+			action = "streamGenerateContent"
 		}
+		url = fmt.Sprintf("%s/v1beta/models/%s:%s",
+			strings.TrimSuffix(upstream.BaseURL, "/"), model, action)
+	case config.APITypeOpenAI:
+		// Convert to chat/completions format
+		bodyMap = convertResponsesToChatRequest(bodyMap)
+		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
+	case config.APITypeResponses:
+		// Native Responses API - no conversion needed
+		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
 	default:
 		bodyMap = convertResponsesToAnthropicRequest(bodyMap)
 		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
@@ -268,11 +275,22 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 	stripHopByHopHeaders(req.Header)
 
 	// Set authentication based on API type
-	if apiType == config.APITypeAnthropic {
+	switch apiType {
+	case config.APITypeAnthropic:
 		req.Header.Set("x-api-key", upstream.Token)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Del("Authorization")
-	} else {
+	case config.APITypeGemini:
+		if !strings.Contains(url, "key=") {
+			url = url + "?key=" + upstream.Token
+			req.URL, _ = req.URL.Parse(url)
+		}
+		req.Header.Del("Authorization")
+		req.Header.Del("x-api-key")
+	case config.APITypeOpenAI, config.APITypeResponses:
+		req.Header.Set("Authorization", "Bearer "+upstream.Token)
+		req.Header.Del("x-api-key")
+	default:
 		req.Header.Set("Authorization", "Bearer "+upstream.Token)
 		req.Header.Del("x-api-key")
 	}
@@ -287,7 +305,8 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 
 	// Handle response conversion
 	if resp.StatusCode < 400 {
-		needsConversion := apiType == config.APITypeAnthropic || (apiType == config.APITypeOpenAI && !upstream.SupportsResponsesAPI())
+		// APITypeResponses doesn't need conversion - it's native Responses API
+		needsConversion := apiType != config.APITypeResponses
 
 		if needsConversion {
 			if forceStream || (bodyMap["stream"] == true) {
@@ -385,7 +404,7 @@ func extractResponsesPromptPreview(input any) string {
 }
 
 // convertResponsesToAnthropicRequest converts Responses API request to Anthropic format
-func convertResponsesToAnthropicRequest(req map[string]any) map[string]any {
+func convertResponsesToAnthropicRequest(req map[string]any, defaultMaxTokens ...int) map[string]any {
 	anthropicReq := make(map[string]any)
 
 	// Copy model
@@ -397,7 +416,11 @@ func convertResponsesToAnthropicRequest(req map[string]any) map[string]any {
 	if maxTokens, ok := req["max_output_tokens"]; ok {
 		anthropicReq["max_tokens"] = maxTokens
 	} else {
-		anthropicReq["max_tokens"] = 4096
+		maxTokensDefault := 4096
+		if len(defaultMaxTokens) > 0 && defaultMaxTokens[0] > 0 {
+			maxTokensDefault = defaultMaxTokens[0]
+		}
+		anthropicReq["max_tokens"] = maxTokensDefault
 	}
 
 	// Copy optional parameters
@@ -524,23 +547,27 @@ func convertInputToChatMessages(input any) []map[string]any {
 	return messages
 }
 
-// convertToResponsesFormat converts Anthropic or Chat Completions response to Responses API format
+// convertToResponsesFormat converts Anthropic, Gemini, or Chat Completions response to Responses API format
 func convertToResponsesFormat(body []byte, apiType config.APIType) ([]byte, error) {
-	if apiType == config.APITypeAnthropic {
+	switch apiType {
+	case config.APITypeAnthropic:
 		return convertAnthropicToResponses(body)
+	case config.APITypeGemini:
+		return convertGeminiToResponses(body)
+	default:
+		return convertChatToResponses(body)
 	}
-	return convertChatToResponses(body)
 }
 
 func convertAnthropicToResponses(body []byte) ([]byte, error) {
 	var anthropicResp struct {
-		ID           string `json:"id"`
-		Type         string `json:"type"`
-		Role         string `json:"role"`
-		Content      []any  `json:"content"`
-		Model        string `json:"model"`
-		StopReason   string `json:"stop_reason"`
-		Usage        struct {
+		ID         string `json:"id"`
+		Type       string `json:"type"`
+		Role       string `json:"role"`
+		Content    []any  `json:"content"`
+		Model      string `json:"model"`
+		StopReason string `json:"stop_reason"`
+		Usage      struct {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
 		} `json:"usage"`
@@ -631,6 +658,56 @@ func convertChatToResponses(body []byte) ([]byte, error) {
 	return json.Marshal(resp)
 }
 
+func convertGeminiToResponses(body []byte) ([]byte, error) {
+	var geminiResp GeminiResponse
+	if err := json.Unmarshal(body, &geminiResp); err != nil {
+		return nil, err
+	}
+
+	var contents []ResponseContent
+	if len(geminiResp.Candidates) > 0 {
+		for _, part := range geminiResp.Candidates[0].Content.Parts {
+			if part.Text != "" {
+				contents = append(contents, ResponseContent{
+					Type: "output_text",
+					Text: part.Text,
+				})
+			}
+		}
+	}
+
+	var inputTokens, outputTokens int
+	if geminiResp.UsageMetadata != nil {
+		inputTokens = geminiResp.UsageMetadata.PromptTokenCount
+		outputTokens = geminiResp.UsageMetadata.CandidatesTokenCount
+	}
+
+	responseID := fmt.Sprintf("resp_%d", time.Now().UnixNano())
+	resp := ResponsesResponse{
+		ID:        responseID,
+		Object:    "response",
+		CreatedAt: time.Now().Unix(),
+		Model:     geminiResp.ModelVersion,
+		Status:    "completed",
+		Output: []ResponseOutput{
+			{
+				Type:    "message",
+				ID:      fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+				Role:    "assistant",
+				Content: contents,
+				Status:  "completed",
+			},
+		},
+		Usage: ResponsesUsage{
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
+			TotalTokens:  inputTokens + outputTokens,
+		},
+	}
+
+	return json.Marshal(resp)
+}
+
 // convertStreamToResponses converts streaming response to Responses API format
 func (h *ResponsesHandler) convertStreamToResponses(reader io.Reader, clientWantsStream bool, apiType config.APIType) ([]byte, error) {
 	scanner := bufio.NewScanner(reader)
@@ -668,6 +745,9 @@ func (h *ResponsesHandler) convertStreamToResponses(reader io.Reader, clientWant
 
 		if apiType == config.APITypeAnthropic {
 			return h.processAnthropicStreamEvent(event, currentEventType, &messageID, &model, &inputTokens, &outputTokens, &textContent, &chunks, responseID, clientWantsStream)
+		}
+		if apiType == config.APITypeGemini {
+			return h.processGeminiStreamEvent(event, &messageID, &model, &inputTokens, &outputTokens, &textContent, &chunks, responseID, clientWantsStream)
 		}
 		return h.processOpenAIStreamEvent(event, &messageID, &model, &outputTokens, &textContent, &chunks, responseID, clientWantsStream)
 	}
@@ -864,6 +944,74 @@ func (h *ResponsesHandler) processOpenAIStreamEvent(event map[string]any, messag
 				}
 			}
 			if finishReason, ok := choice["finish_reason"].(string); ok && finishReason != "" {
+				if clientWantsStream {
+					evt := map[string]any{
+						"type": "response.completed",
+						"response": map[string]any{
+							"id":         responseID,
+							"object":     "response",
+							"created_at": time.Now().Unix(),
+							"model":      *model,
+							"status":     "completed",
+						},
+					}
+					evtBytes, _ := json.Marshal(evt)
+					*chunks = append(*chunks, []byte("event: response.completed\ndata: ")...)
+					*chunks = append(*chunks, evtBytes...)
+					*chunks = append(*chunks, []byte("\n\n")...)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (h *ResponsesHandler) processGeminiStreamEvent(event map[string]any, messageID, model *string, inputTokens, outputTokens *int, textContent *strings.Builder, chunks *[]byte, responseID string, clientWantsStream bool) error {
+	// Extract model version
+	if mv, ok := event["modelVersion"].(string); ok {
+		*model = mv
+	}
+
+	// Extract usage metadata
+	if usage, ok := event["usageMetadata"].(map[string]any); ok {
+		if prompt, ok := usage["promptTokenCount"].(float64); ok {
+			*inputTokens = int(prompt)
+		}
+		if candidates, ok := usage["candidatesTokenCount"].(float64); ok {
+			*outputTokens = int(candidates)
+		}
+	}
+
+	// Process candidates
+	if candidates, ok := event["candidates"].([]any); ok && len(candidates) > 0 {
+		if candidate, ok := candidates[0].(map[string]any); ok {
+			if content, ok := candidate["content"].(map[string]any); ok {
+				if parts, ok := content["parts"].([]any); ok {
+					for _, part := range parts {
+						if partMap, ok := part.(map[string]any); ok {
+							if text, ok := partMap["text"].(string); ok {
+								textContent.WriteString(text)
+								if clientWantsStream {
+									evt := map[string]any{
+										"type": "response.output_text.delta",
+										"delta": map[string]any{
+											"type": "output_text_delta",
+											"text": text,
+										},
+									}
+									evtBytes, _ := json.Marshal(evt)
+									*chunks = append(*chunks, []byte("event: response.output_text.delta\ndata: ")...)
+									*chunks = append(*chunks, evtBytes...)
+									*chunks = append(*chunks, []byte("\n\n")...)
+								}
+							}
+						}
+					}
+				}
+			}
+			// Check for finish reason
+			if finishReason, ok := candidate["finishReason"].(string); ok && finishReason != "" {
 				if clientWantsStream {
 					evt := map[string]any{
 						"type": "response.completed",

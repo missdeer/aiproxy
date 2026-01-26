@@ -12,21 +12,21 @@ type ModelMapping map[string]string
 type APIType string
 
 const (
-	APITypeAnthropic APIType = "anthropic"
-	APITypeOpenAI    APIType = "openai"
-	APITypeGemini    APIType = "gemini"
+	APITypeAnthropic APIType = "anthropic" // /v1/messages
+	APITypeOpenAI    APIType = "openai"    // /v1/chat/completions
+	APITypeGemini    APIType = "gemini"    // /v1beta/models/*/generateContent
+	APITypeResponses APIType = "responses" // /v1/responses
 )
 
 type Upstream struct {
-	Name               string       `yaml:"name"`
-	BaseURL            string       `yaml:"base_url"`
-	Token              string       `yaml:"token"`
-	Weight             int          `yaml:"weight"`
-	ModelMappings      ModelMapping `yaml:"model_mappings"`
-	AvailableModels    []string     `yaml:"available_models"`
-	MustStream         bool         `yaml:"must_stream"`
-	APIType            APIType      `yaml:"api_type"`              // "anthropic" or "openai", defaults to "anthropic"
-	SupportsResponses  bool         `yaml:"supports_responses"`    // Whether upstream supports /v1/responses natively
+	Name            string       `yaml:"name"`
+	BaseURL         string       `yaml:"base_url"`
+	Token           string       `yaml:"token"`
+	Weight          int          `yaml:"weight"`
+	ModelMappings   ModelMapping `yaml:"model_mappings"`
+	AvailableModels []string     `yaml:"available_models"`
+	MustStream      bool         `yaml:"must_stream"`
+	APIType         APIType      `yaml:"api_type"` // "anthropic", "openai", "gemini", or "responses"
 }
 
 // GetAPIType returns the API type, defaulting to Anthropic
@@ -35,11 +35,6 @@ func (u *Upstream) GetAPIType() APIType {
 		return APITypeAnthropic
 	}
 	return u.APIType
-}
-
-// SupportsResponsesAPI returns whether the upstream supports Responses API natively
-func (u *Upstream) SupportsResponsesAPI() bool {
-	return u.SupportsResponses
 }
 
 func (u *Upstream) MapModel(model string) string {
@@ -65,9 +60,10 @@ func (u *Upstream) SupportsModel(model string) bool {
 }
 
 type Config struct {
-	Bind      string     `yaml:"bind"`
-	Listen    string     `yaml:"listen"`
-	Upstreams []Upstream `yaml:"upstreams"`
+	Bind             string     `yaml:"bind"`
+	Listen           string     `yaml:"listen"`
+	DefaultMaxTokens int        `yaml:"default_max_tokens"`
+	Upstreams        []Upstream `yaml:"upstreams"`
 }
 
 func Load(path string) (*Config, error) {
@@ -87,6 +83,10 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Bind == "" {
 		cfg.Bind = "127.0.0.1"
+	}
+
+	if cfg.DefaultMaxTokens <= 0 {
+		cfg.DefaultMaxTokens = 4096
 	}
 
 	for i := range cfg.Upstreams {
