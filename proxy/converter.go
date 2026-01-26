@@ -12,6 +12,84 @@ import (
 )
 
 // ============================================================================
+// Helper functions for common operations
+// ============================================================================
+
+// copyParam copies a single parameter from src to dst if it exists
+func copyParam(src, dst map[string]any, srcKey, dstKey string) {
+	if v, ok := src[srcKey]; ok {
+		dst[dstKey] = v
+	}
+}
+
+// copyParams copies multiple parameters from src to dst using same keys
+func copyParams(src, dst map[string]any, keys ...string) {
+	for _, key := range keys {
+		if v, ok := src[key]; ok {
+			dst[key] = v
+		}
+	}
+}
+
+// buildGeminiGenerationConfig builds Gemini generationConfig from common parameters
+func buildGeminiGenerationConfig(req map[string]any, tempKey, topPKey, maxTokensKey, stopKey string) map[string]any {
+	genConfig := make(map[string]any)
+	if temp, ok := req[tempKey]; ok {
+		genConfig["temperature"] = temp
+	}
+	if topP, ok := req[topPKey]; ok {
+		genConfig["topP"] = topP
+	}
+	if maxTokens, ok := req[maxTokensKey]; ok {
+		genConfig["maxOutputTokens"] = maxTokens
+	}
+	if stopKey != "" {
+		if stop, ok := req[stopKey]; ok {
+			genConfig["stopSequences"] = stop
+		}
+	}
+	return genConfig
+}
+
+// extractTextFromGeminiParts extracts and concatenates text from Gemini parts array
+func extractTextFromGeminiParts(parts []any) string {
+	var text strings.Builder
+	for _, part := range parts {
+		if partMap, ok := part.(map[string]any); ok {
+			if t, ok := partMap["text"].(string); ok {
+				text.WriteString(t)
+			}
+		}
+	}
+	return text.String()
+}
+
+// mapRoleToGemini converts OpenAI/Anthropic role to Gemini role
+func mapRoleToGemini(role string) string {
+	if role == "assistant" {
+		return "model"
+	}
+	return "user"
+}
+
+// mapRoleFromGemini converts Gemini role to OpenAI/Anthropic role
+func mapRoleFromGemini(role string) string {
+	if role == "model" {
+		return "assistant"
+	}
+	return role
+}
+
+// appendSSEEvent appends an SSE event to chunks buffer
+func appendSSEEvent(chunks []byte, eventType string, data any) []byte {
+	eventBytes, _ := json.Marshal(data)
+	chunks = append(chunks, []byte("event: "+eventType+"\ndata: ")...)
+	chunks = append(chunks, eventBytes...)
+	chunks = append(chunks, []byte("\n\n")...)
+	return chunks
+}
+
+// ============================================================================
 // Anthropic -> Other formats
 // ============================================================================
 
@@ -19,29 +97,13 @@ import (
 func convertAnthropicToOpenAIRequest(req map[string]any) map[string]any {
 	openAIReq := make(map[string]any)
 
-	// Copy model
-	if model, ok := req["model"]; ok {
-		openAIReq["model"] = model
-	}
-
-	// Convert max_tokens
-	if maxTokens, ok := req["max_tokens"]; ok {
-		openAIReq["max_tokens"] = maxTokens
-	}
+	// Copy model and max_tokens
+	copyParam(req, openAIReq, "model", "model")
+	copyParam(req, openAIReq, "max_tokens", "max_tokens")
 
 	// Copy optional parameters
-	if temp, ok := req["temperature"]; ok {
-		openAIReq["temperature"] = temp
-	}
-	if topP, ok := req["top_p"]; ok {
-		openAIReq["top_p"] = topP
-	}
-	if stop, ok := req["stop_sequences"]; ok {
-		openAIReq["stop"] = stop
-	}
-	if stream, ok := req["stream"]; ok {
-		openAIReq["stream"] = stream
-	}
+	copyParams(req, openAIReq, "temperature", "top_p", "stream")
+	copyParam(req, openAIReq, "stop_sequences", "stop")
 
 	var messages []map[string]any
 
@@ -125,10 +187,7 @@ func convertAnthropicToGeminiRequest(req map[string]any) map[string]any {
 				content := msgMap["content"]
 
 				// Map role
-				geminiRole := "user"
-				if role == "assistant" {
-					geminiRole = "model"
-				}
+				geminiRole := mapRoleToGemini(role)
 
 				var parts []map[string]any
 				switch c := content.(type) {
@@ -173,19 +232,7 @@ func convertAnthropicToGeminiRequest(req map[string]any) map[string]any {
 	}
 
 	// Convert generation config
-	genConfig := make(map[string]any)
-	if temp, ok := req["temperature"]; ok {
-		genConfig["temperature"] = temp
-	}
-	if topP, ok := req["top_p"]; ok {
-		genConfig["topP"] = topP
-	}
-	if maxTokens, ok := req["max_tokens"]; ok {
-		genConfig["maxOutputTokens"] = maxTokens
-	}
-	if stop, ok := req["stop_sequences"]; ok {
-		genConfig["stopSequences"] = stop
-	}
+	genConfig := buildGeminiGenerationConfig(req, "temperature", "top_p", "max_tokens", "stop_sequences")
 	if len(genConfig) > 0 {
 		geminiReq["generationConfig"] = genConfig
 	}
@@ -203,20 +250,10 @@ func convertAnthropicToResponsesRequest(req map[string]any) map[string]any {
 	}
 
 	// Convert max_tokens to max_output_tokens
-	if maxTokens, ok := req["max_tokens"]; ok {
-		responsesReq["max_output_tokens"] = maxTokens
-	}
+	copyParam(req, responsesReq, "max_tokens", "max_output_tokens")
 
 	// Copy optional parameters
-	if temp, ok := req["temperature"]; ok {
-		responsesReq["temperature"] = temp
-	}
-	if topP, ok := req["top_p"]; ok {
-		responsesReq["top_p"] = topP
-	}
-	if stream, ok := req["stream"]; ok {
-		responsesReq["stream"] = stream
-	}
+	copyParams(req, responsesReq, "temperature", "top_p", "stream")
 
 	// Convert system to instructions
 	if system, ok := req["system"].(string); ok && system != "" {
@@ -282,18 +319,8 @@ func convertOpenAIChatToAnthropicRequest(req map[string]any, defaultMaxTokens ..
 	}
 
 	// Copy optional parameters
-	if temp, ok := req["temperature"]; ok {
-		anthropicReq["temperature"] = temp
-	}
-	if topP, ok := req["top_p"]; ok {
-		anthropicReq["top_p"] = topP
-	}
-	if stop, ok := req["stop"]; ok {
-		anthropicReq["stop_sequences"] = stop
-	}
-	if stream, ok := req["stream"]; ok {
-		anthropicReq["stream"] = stream
-	}
+	copyParams(req, anthropicReq, "temperature", "top_p", "stream")
+	copyParam(req, anthropicReq, "stop", "stop_sequences")
 
 	// Convert messages
 	messages, ok := req["messages"].([]any)
@@ -395,21 +422,9 @@ func convertOpenAIChatToGeminiRequest(req map[string]any) map[string]any {
 func convertOpenAIChatToResponsesRequest(req map[string]any) map[string]any {
 	responsesReq := make(map[string]any)
 
-	if model, ok := req["model"]; ok {
-		responsesReq["model"] = model
-	}
-	if maxTokens, ok := req["max_tokens"]; ok {
-		responsesReq["max_output_tokens"] = maxTokens
-	}
-	if temp, ok := req["temperature"]; ok {
-		responsesReq["temperature"] = temp
-	}
-	if topP, ok := req["top_p"]; ok {
-		responsesReq["top_p"] = topP
-	}
-	if stream, ok := req["stream"]; ok {
-		responsesReq["stream"] = stream
-	}
+	copyParam(req, responsesReq, "model", "model")
+	copyParam(req, responsesReq, "max_tokens", "max_output_tokens")
+	copyParams(req, responsesReq, "temperature", "top_p", "stream")
 
 	// Convert messages to input
 	var input []map[string]any
@@ -450,15 +465,7 @@ func convertGeminiToResponsesRequest(req map[string]any) map[string]any {
 	// Convert system instruction to instructions
 	if sysInstr, ok := req["systemInstruction"].(map[string]any); ok {
 		if parts, ok := sysInstr["parts"].([]any); ok {
-			var systemText string
-			for _, part := range parts {
-				if partMap, ok := part.(map[string]any); ok {
-					if text, ok := partMap["text"].(string); ok {
-						systemText += text
-					}
-				}
-			}
-			if systemText != "" {
+			if systemText := extractTextFromGeminiParts(parts); systemText != "" {
 				responsesReq["instructions"] = systemText
 			}
 		}
@@ -471,22 +478,12 @@ func convertGeminiToResponsesRequest(req map[string]any) map[string]any {
 			if contentMap, ok := content.(map[string]any); ok {
 				role := "user"
 				if r, ok := contentMap["role"].(string); ok {
-					if r == "model" {
-						role = "assistant"
-					} else {
-						role = r
-					}
+					role = mapRoleFromGemini(r)
 				}
 
 				var textContent string
 				if parts, ok := contentMap["parts"].([]any); ok {
-					for _, part := range parts {
-						if partMap, ok := part.(map[string]any); ok {
-							if text, ok := partMap["text"].(string); ok {
-								textContent += text
-							}
-						}
-					}
+					textContent = extractTextFromGeminiParts(parts)
 				}
 
 				input = append(input, map[string]any{
@@ -545,10 +542,7 @@ func convertResponsesToGeminiRequest(req map[string]any) map[string]any {
 		for _, item := range v {
 			if itemMap, ok := item.(map[string]any); ok {
 				role, _ := itemMap["role"].(string)
-				geminiRole := "user"
-				if role == "assistant" {
-					geminiRole = "model"
-				}
+				geminiRole := mapRoleToGemini(role)
 
 				var parts []map[string]any
 				if content, ok := itemMap["content"].(string); ok {
@@ -565,16 +559,7 @@ func convertResponsesToGeminiRequest(req map[string]any) map[string]any {
 	geminiReq["contents"] = contents
 
 	// Convert generation config
-	genConfig := make(map[string]any)
-	if temp, ok := req["temperature"]; ok {
-		genConfig["temperature"] = temp
-	}
-	if topP, ok := req["top_p"]; ok {
-		genConfig["topP"] = topP
-	}
-	if maxTokens, ok := req["max_output_tokens"]; ok {
-		genConfig["maxOutputTokens"] = maxTokens
-	}
+	genConfig := buildGeminiGenerationConfig(req, "temperature", "top_p", "max_output_tokens", "")
 	if len(genConfig) > 0 {
 		geminiReq["generationConfig"] = genConfig
 	}
@@ -809,6 +794,66 @@ func convertResponsesToOpenAIChat(body []byte) ([]byte, error) {
 // Stream conversions
 // ============================================================================
 
+// extractOpenAIStreamContent extracts content from OpenAI streaming event
+func extractOpenAIStreamContent(event map[string]any) (content string, model string) {
+	if m, ok := event["model"].(string); ok {
+		model = m
+	}
+	choices, ok := event["choices"].([]any)
+	if !ok || len(choices) == 0 {
+		return
+	}
+	choice, ok := choices[0].(map[string]any)
+	if !ok {
+		return
+	}
+	delta, ok := choice["delta"].(map[string]any)
+	if !ok {
+		return
+	}
+	content, _ = delta["content"].(string)
+	return
+}
+
+// extractGeminiStreamData extracts texts and metadata from Gemini streaming event
+func extractGeminiStreamData(event map[string]any) (texts []string, model string, inputTokens, outputTokens int) {
+	if mv, ok := event["modelVersion"].(string); ok {
+		model = mv
+	}
+	if usage, ok := event["usageMetadata"].(map[string]any); ok {
+		if prompt, ok := usage["promptTokenCount"].(float64); ok {
+			inputTokens = int(prompt)
+		}
+		if candidates, ok := usage["candidatesTokenCount"].(float64); ok {
+			outputTokens = int(candidates)
+		}
+	}
+	candidates, ok := event["candidates"].([]any)
+	if !ok || len(candidates) == 0 {
+		return
+	}
+	candidate, ok := candidates[0].(map[string]any)
+	if !ok {
+		return
+	}
+	content, ok := candidate["content"].(map[string]any)
+	if !ok {
+		return
+	}
+	parts, ok := content["parts"].([]any)
+	if !ok {
+		return
+	}
+	for _, part := range parts {
+		if partMap, ok := part.(map[string]any); ok {
+			if text, ok := partMap["text"].(string); ok {
+				texts = append(texts, text)
+			}
+		}
+	}
+	return
+}
+
 // convertStreamToAnthropic converts OpenAI or Gemini streaming response to Anthropic format
 func (h *Handler) convertStreamToAnthropic(reader io.Reader, apiType config.APIType, toNonStream bool) ([]byte, error) {
 	scanner := bufio.NewScanner(reader)
@@ -844,73 +889,48 @@ func (h *Handler) convertStreamToAnthropic(reader io.Reader, apiType config.APIT
 
 		switch apiType {
 		case config.APITypeOpenAI:
-			if m, ok := event["model"].(string); ok {
+			content, m := extractOpenAIStreamContent(event)
+			if m != "" {
 				model = m
 			}
-			if choices, ok := event["choices"].([]any); ok && len(choices) > 0 {
-				if choice, ok := choices[0].(map[string]any); ok {
-					if delta, ok := choice["delta"].(map[string]any); ok {
-						if content, ok := delta["content"].(string); ok {
-							textContent.WriteString(content)
-							if !toNonStream {
-								// Generate Anthropic SSE event
-								evt := map[string]any{
-									"type":  "content_block_delta",
-									"index": 0,
-									"delta": map[string]any{
-										"type": "text_delta",
-										"text": content,
-									},
-								}
-								evtBytes, _ := json.Marshal(evt)
-								chunks = append(chunks, []byte("event: content_block_delta\ndata: ")...)
-								chunks = append(chunks, evtBytes...)
-								chunks = append(chunks, []byte("\n\n")...)
-							}
-						}
+			if content != "" {
+				textContent.WriteString(content)
+				if !toNonStream {
+					evt := map[string]any{
+						"type":  "content_block_delta",
+						"index": 0,
+						"delta": map[string]any{
+							"type": "text_delta",
+							"text": content,
+						},
 					}
+					chunks = appendSSEEvent(chunks, "content_block_delta", evt)
 				}
 			}
 		case config.APITypeGemini:
-			if candidates, ok := event["candidates"].([]any); ok && len(candidates) > 0 {
-				if candidate, ok := candidates[0].(map[string]any); ok {
-					if content, ok := candidate["content"].(map[string]any); ok {
-						if parts, ok := content["parts"].([]any); ok {
-							for _, part := range parts {
-								if partMap, ok := part.(map[string]any); ok {
-									if text, ok := partMap["text"].(string); ok {
-										textContent.WriteString(text)
-										if !toNonStream {
-											evt := map[string]any{
-												"type":  "content_block_delta",
-												"index": 0,
-												"delta": map[string]any{
-													"type": "text_delta",
-													"text": text,
-												},
-											}
-											evtBytes, _ := json.Marshal(evt)
-											chunks = append(chunks, []byte("event: content_block_delta\ndata: ")...)
-											chunks = append(chunks, evtBytes...)
-											chunks = append(chunks, []byte("\n\n")...)
-										}
-									}
-								}
-							}
-						}
+			texts, m, in, out := extractGeminiStreamData(event)
+			if m != "" {
+				model = m
+			}
+			if in > 0 {
+				inputTokens = in
+			}
+			if out > 0 {
+				outputTokens = out
+			}
+			for _, text := range texts {
+				textContent.WriteString(text)
+				if !toNonStream {
+					evt := map[string]any{
+						"type":  "content_block_delta",
+						"index": 0,
+						"delta": map[string]any{
+							"type": "text_delta",
+							"text": text,
+						},
 					}
+					chunks = appendSSEEvent(chunks, "content_block_delta", evt)
 				}
-			}
-			if usage, ok := event["usageMetadata"].(map[string]any); ok {
-				if prompt, ok := usage["promptTokenCount"].(float64); ok {
-					inputTokens = int(prompt)
-				}
-				if candidates, ok := usage["candidatesTokenCount"].(float64); ok {
-					outputTokens = int(candidates)
-				}
-			}
-			if mv, ok := event["modelVersion"].(string); ok {
-				model = mv
 			}
 		}
 	}
@@ -930,10 +950,7 @@ func (h *Handler) convertStreamToAnthropic(reader io.Reader, apiType config.APIT
 				},
 			},
 		}
-		startBytes, _ := json.Marshal(startEvt)
-		chunks = append(chunks, []byte("event: message_start\ndata: ")...)
-		chunks = append(chunks, startBytes...)
-		chunks = append(chunks, []byte("\n\n")...)
+		chunks = appendSSEEvent(chunks, "message_start", startEvt)
 
 		// content_block_start
 		blockStartEvt := map[string]any{
@@ -944,10 +961,7 @@ func (h *Handler) convertStreamToAnthropic(reader io.Reader, apiType config.APIT
 				"text": "",
 			},
 		}
-		blockStartBytes, _ := json.Marshal(blockStartEvt)
-		chunks = append(chunks, []byte("event: content_block_start\ndata: ")...)
-		chunks = append(chunks, blockStartBytes...)
-		chunks = append(chunks, []byte("\n\n")...)
+		chunks = appendSSEEvent(chunks, "content_block_start", blockStartEvt)
 	}
 
 	for scanner.Scan() {
@@ -1004,10 +1018,7 @@ func (h *Handler) convertStreamToAnthropic(reader io.Reader, apiType config.APIT
 		"type":  "content_block_stop",
 		"index": 0,
 	}
-	blockStopBytes, _ := json.Marshal(blockStopEvt)
-	chunks = append(chunks, []byte("event: content_block_stop\ndata: ")...)
-	chunks = append(chunks, blockStopBytes...)
-	chunks = append(chunks, []byte("\n\n")...)
+	chunks = appendSSEEvent(chunks, "content_block_stop", blockStopEvt)
 
 	// message_delta
 	deltaEvt := map[string]any{
@@ -1019,17 +1030,11 @@ func (h *Handler) convertStreamToAnthropic(reader io.Reader, apiType config.APIT
 			"output_tokens": outputTokens,
 		},
 	}
-	deltaBytes, _ := json.Marshal(deltaEvt)
-	chunks = append(chunks, []byte("event: message_delta\ndata: ")...)
-	chunks = append(chunks, deltaBytes...)
-	chunks = append(chunks, []byte("\n\n")...)
+	chunks = appendSSEEvent(chunks, "message_delta", deltaEvt)
 
 	// message_stop
 	stopEvt := map[string]any{"type": "message_stop"}
-	stopBytes, _ := json.Marshal(stopEvt)
-	chunks = append(chunks, []byte("event: message_stop\ndata: ")...)
-	chunks = append(chunks, stopBytes...)
-	chunks = append(chunks, []byte("\n\n")...)
+	chunks = appendSSEEvent(chunks, "message_stop", stopEvt)
 
 	return chunks, nil
 }
