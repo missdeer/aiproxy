@@ -68,11 +68,21 @@ func (u *Upstream) SupportsModel(model string) bool {
 	return false
 }
 
+// LogConfig configures rotating file logging
+type LogConfig struct {
+	File       string `yaml:"file"`        // Log file path, empty = stdout
+	MaxSize    int    `yaml:"max_size"`    // Max size in MB before rotation (default: 100)
+	MaxBackups int    `yaml:"max_backups"` // Max number of old files to keep (default: 3)
+	MaxAge     int    `yaml:"max_age"`     // Max days to retain old files (default: 28)
+	Compress   bool   `yaml:"compress"`    // Compress rotated files (default: false)
+}
+
 type Config struct {
 	Bind             string     `yaml:"bind"`
 	Listen           string     `yaml:"listen"`
 	DefaultMaxTokens int        `yaml:"default_max_tokens"`
 	Upstreams        []Upstream `yaml:"upstreams"`
+	Log              LogConfig  `yaml:"log"`
 }
 
 func Load(path string) (*Config, error) {
@@ -102,6 +112,17 @@ func Load(path string) (*Config, error) {
 		if cfg.Upstreams[i].Weight <= 0 {
 			cfg.Upstreams[i].Weight = 1
 		}
+	}
+
+	// Set log defaults
+	if cfg.Log.MaxSize <= 0 {
+		cfg.Log.MaxSize = 100 // 100 MB
+	}
+	if cfg.Log.MaxBackups <= 0 {
+		cfg.Log.MaxBackups = 3
+	}
+	if cfg.Log.MaxAge <= 0 {
+		cfg.Log.MaxAge = 28 // 28 days
 	}
 
 	return &cfg, nil

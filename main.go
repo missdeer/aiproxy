@@ -7,6 +7,7 @@ import (
 
 	"github.com/missdeer/aiproxy/config"
 	"github.com/missdeer/aiproxy/proxy"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 func main() {
@@ -16,6 +17,17 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Configure rotating file logging if log file is specified
+	if cfg.Log.File != "" {
+		log.SetOutput(&lumberjack.Logger{
+			Filename:   cfg.Log.File,
+			MaxSize:    cfg.Log.MaxSize,
+			MaxBackups: cfg.Log.MaxBackups,
+			MaxAge:     cfg.Log.MaxAge,
+			Compress:   cfg.Log.Compress,
+		})
 	}
 
 	log.Printf("Loaded %d upstreams", len(cfg.Upstreams))

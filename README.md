@@ -9,6 +9,7 @@ API proxy for Anthropic Claude API with intelligent load balancing and automatic
 - **Model Filtering** - Only route requests to upstreams that support the requested model
 - **Circuit Breaker** - Automatically mark failing upstreams as unavailable (3 consecutive failures), with auto-recovery after 30 minutes
 - **Automatic Failover** - Seamlessly retry failed requests on alternative upstreams
+- **Rotating File Logging** - Optional file-based logging with automatic rotation by size/age
 - **Detailed Logging** - Track prompt previews, model mappings, upstream selection, and error responses
 - **Streaming Support** - Full support for streaming responses
 - **Upstream Must-Stream Fallback** - Force streaming-only upstreams while keeping non-stream client compatibility
@@ -29,6 +30,14 @@ bind: "127.0.0.1"
 
 # Listen port
 listen: ":8080"
+
+# Rotating file log (optional, omit for stdout)
+log:
+  file: "/var/log/aiproxy/aiproxy.log"
+  max_size: 100       # MB before rotation
+  max_backups: 3      # old files to keep
+  max_age: 28         # days to retain
+  compress: false     # gzip old files
 
 # Upstream services
 upstreams:

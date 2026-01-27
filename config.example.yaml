@@ -10,6 +10,15 @@ listen: ":8642"
 # This is used when converting requests to APIs that require max_tokens (e.g., Anthropic)
 default_max_tokens: 4096
 
+# Rotating file log configuration (optional)
+# If not specified or file is empty, logs go to stdout
+log:
+  file: ""              # Log file path, empty = stdout (e.g., "/var/log/aiproxy/aiproxy.log")
+  max_size: 100         # Max size in MB before rotation (default: 100)
+  max_backups: 3        # Max number of old files to keep (default: 3)
+  max_age: 28           # Max days to retain old files (default: 28)
+  compress: false       # Compress rotated files with gzip (default: false)
+
 # Upstream services configuration
 # Requests are load-balanced using weighted round-robin
 # On 4xx/5xx errors, the next upstream is automatically tried
