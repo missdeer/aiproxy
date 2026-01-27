@@ -250,6 +250,10 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 	case config.APITypeResponses:
 		// Native Responses API - no conversion needed
 		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
+		// Pass through query parameters when API types match
+		if originalReq.URL.RawQuery != "" {
+			url = url + "?" + originalReq.URL.RawQuery
+		}
 	default:
 		bodyMap = convertResponsesToAnthropicRequest(bodyMap)
 		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"

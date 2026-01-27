@@ -225,6 +225,10 @@ func (h *OpenAIHandler) forwardRequest(upstream config.Upstream, model string, o
 			return 0, nil, nil, err
 		}
 		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
+		// Pass through query parameters when API types match
+		if originalReq.URL.RawQuery != "" {
+			url = url + "?" + originalReq.URL.RawQuery
+		}
 
 	case config.APITypeResponses:
 		// Convert OpenAI chat to Responses format

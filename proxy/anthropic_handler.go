@@ -226,6 +226,10 @@ func (h *Handler) forwardRequest(upstream config.Upstream, model string, origina
 			return 0, nil, nil, err
 		}
 		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
+		// Pass through query parameters when API types match
+		if originalReq.URL.RawQuery != "" {
+			url = url + "?" + originalReq.URL.RawQuery
+		}
 
 	case config.APITypeOpenAI:
 		// Convert Anthropic to OpenAI format

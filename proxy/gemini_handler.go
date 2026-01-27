@@ -242,6 +242,10 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 			action = "streamGenerateContent"
 		}
 		url = fmt.Sprintf("%s/v1beta/models/%s:%s", strings.TrimSuffix(upstream.BaseURL, "/"), model, action)
+		// Pass through query parameters when API types match (excluding key parameter which is handled separately)
+		if originalReq.URL.RawQuery != "" {
+			url = url + "?" + originalReq.URL.RawQuery
+		}
 		modifiedBody = originalBody
 
 	case config.APITypeAnthropic:
