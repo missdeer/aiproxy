@@ -158,13 +158,17 @@ func (h *GeminiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[INFO] Found %d available upstreams for model %s", len(supportedUpstreams), originalModel)
 
-	// Reorder upstreams
-	next := h.balancer.Next()
+	// Use NextForModel to get the next upstream that supports this model
+	next := h.balancer.NextForModel(originalModel)
+
+	// Reorder upstreams: start from the one returned by NextForModel
 	startIdx := 0
-	for i, u := range supportedUpstreams {
-		if u.Name == next.Name {
-			startIdx = i
-			break
+	if next != nil {
+		for i, u := range supportedUpstreams {
+			if u.Name == next.Name {
+				startIdx = i
+				break
+			}
 		}
 	}
 	ordered := make([]config.Upstream, 0, len(supportedUpstreams))

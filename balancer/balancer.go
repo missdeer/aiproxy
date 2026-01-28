@@ -91,6 +91,11 @@ func (w *WeightedRoundRobin) IsAvailable(name string) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	return w.isAvailableLocked(name)
+}
+
+// isAvailableLocked checks availability without locking (must be called with lock held)
+func (w *WeightedRoundRobin) isAvailableLocked(name string) bool {
 	state, ok := w.states[name]
 	if !ok {
 		return true
@@ -146,6 +151,11 @@ func (w *WeightedRoundRobin) Next() *config.Upstream {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	return w.nextLocked()
+}
+
+// nextLocked returns the next upstream (must be called with lock held)
+func (w *WeightedRoundRobin) nextLocked() *config.Upstream {
 	if len(w.upstreams) == 0 {
 		return nil
 	}
@@ -166,6 +176,75 @@ func (w *WeightedRoundRobin) Next() *config.Upstream {
 			return &w.upstreams[w.current]
 		}
 	}
+}
+
+// NextMatching returns the next upstream that matches the given filter function.
+// IMPORTANT: The matches function must NOT call any WeightedRoundRobin methods
+// (IsAvailable, etc.) as this would cause a deadlock. Use NextForModel instead
+// if you need to filter by model and availability.
+// It advances the round-robin state until it finds a matching upstream or has
+// checked all upstreams. Returns nil if no upstream matches.
+func (w *WeightedRoundRobin) NextMatching(matches func(*config.Upstream) bool) *config.Upstream {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if len(w.upstreams) == 0 {
+		return nil
+	}
+
+	// Calculate total weight sum to ensure we cover a full weighted cycle
+	totalWeight := 0
+	for _, wt := range w.weights {
+		totalWeight += wt
+	}
+
+	// Try enough iterations to cover a full weighted round-robin cycle
+	maxIterations := totalWeight
+	if maxIterations < len(w.upstreams) {
+		maxIterations = len(w.upstreams)
+	}
+
+	for i := 0; i < maxIterations; i++ {
+		next := w.nextLocked()
+		if next != nil && matches(next) {
+			return next
+		}
+	}
+
+	return nil
+}
+
+// NextForModel returns the next available upstream that supports the given model.
+// This is the preferred method when filtering by model and availability as it
+// avoids deadlock issues with callback functions.
+func (w *WeightedRoundRobin) NextForModel(model string) *config.Upstream {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if len(w.upstreams) == 0 {
+		return nil
+	}
+
+	// Calculate total weight sum to ensure we cover a full weighted cycle
+	totalWeight := 0
+	for _, wt := range w.weights {
+		totalWeight += wt
+	}
+
+	// Try enough iterations to cover a full weighted round-robin cycle
+	maxIterations := totalWeight
+	if maxIterations < len(w.upstreams) {
+		maxIterations = len(w.upstreams)
+	}
+
+	for i := 0; i < maxIterations; i++ {
+		next := w.nextLocked()
+		if next != nil && next.SupportsModel(model) && w.isAvailableLocked(next.Name) {
+			return next
+		}
+	}
+
+	return nil
 }
 
 // GetAll returns all upstreams in weighted order starting from current position

@@ -58,13 +58,17 @@ func (b *BaseHandler) FilterAndOrderUpstreams(model string) ([]config.Upstream, 
 		return nil, nil
 	}
 
-	// Reorder upstreams: start from the one returned by Next()
-	next := b.Balancer.Next()
+	// Use NextForModel to get the next upstream that supports this model
+	next := b.Balancer.NextForModel(model)
+
+	// Reorder upstreams: start from the one returned by NextForModel
 	startIdx := 0
-	for i, u := range supportedUpstreams {
-		if u.Name == next.Name {
-			startIdx = i
-			break
+	if next != nil {
+		for i, u := range supportedUpstreams {
+			if u.Name == next.Name {
+				startIdx = i
+				break
+			}
 		}
 	}
 
