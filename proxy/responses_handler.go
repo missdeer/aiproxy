@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/missdeer/aiproxy/balancer"
@@ -20,6 +21,7 @@ type ResponsesHandler struct {
 	cfg      *config.Config
 	balancer *balancer.WeightedRoundRobin
 	client   *http.Client
+	mu       sync.RWMutex
 }
 
 // NewResponsesHandler creates a new Responses API handler
@@ -29,6 +31,14 @@ func NewResponsesHandler(cfg *config.Config) *ResponsesHandler {
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
 		client:   &http.Client{},
 	}
+}
+
+// UpdateConfig updates the handler's configuration
+func (h *ResponsesHandler) UpdateConfig(cfg *config.Config) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cfg = cfg
+	h.balancer.Update(cfg.Upstreams)
 }
 
 // ResponsesRequest represents OpenAI Responses API request

@@ -183,5 +183,61 @@ func (w *WeightedRoundRobin) GetAll() []config.Upstream {
 }
 
 func (w *WeightedRoundRobin) Len() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return len(w.upstreams)
+}
+
+// Update replaces the upstreams with a new set while preserving circuit breaker state
+func (w *WeightedRoundRobin) Update(upstreams []config.Upstream) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// Filter out disabled upstreams
+	var enabledUpstreams []config.Upstream
+	for _, u := range upstreams {
+		if u.IsEnabled() {
+			enabledUpstreams = append(enabledUpstreams, u)
+		}
+	}
+
+	if len(enabledUpstreams) == 0 {
+		w.upstreams = nil
+		w.weights = nil
+		w.current = -1
+		w.gcd = 0
+		w.maxWeight = 0
+		return
+	}
+
+	// Preserve existing state for upstreams that still exist
+	newStates := make(map[string]*upstreamState)
+	for _, u := range enabledUpstreams {
+		if oldState, ok := w.states[u.Name]; ok {
+			newStates[u.Name] = oldState
+		} else {
+			newStates[u.Name] = &upstreamState{}
+		}
+	}
+
+	weights := make([]int, len(enabledUpstreams))
+	maxWeight := 0
+	for i, u := range enabledUpstreams {
+		weights[i] = u.Weight
+		if u.Weight > maxWeight {
+			maxWeight = u.Weight
+		}
+	}
+
+	gcd := weights[0]
+	for _, wt := range weights[1:] {
+		gcd = gcdFunc(gcd, wt)
+	}
+
+	w.upstreams = enabledUpstreams
+	w.weights = weights
+	w.states = newStates
+	w.current = -1
+	w.gcd = gcd
+	w.maxWeight = maxWeight
 }

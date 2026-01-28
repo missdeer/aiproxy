@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/missdeer/aiproxy/balancer"
 	"github.com/missdeer/aiproxy/config"
@@ -19,6 +20,7 @@ type GeminiHandler struct {
 	cfg      *config.Config
 	balancer *balancer.WeightedRoundRobin
 	client   *http.Client
+	mu       sync.RWMutex
 }
 
 // NewGeminiHandler creates a new Gemini API handler
@@ -28,6 +30,24 @@ func NewGeminiHandler(cfg *config.Config) *GeminiHandler {
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
 		client:   &http.Client{},
 	}
+}
+
+// UpdateConfig updates the handler's configuration
+func (h *GeminiHandler) UpdateConfig(cfg *config.Config) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cfg = cfg
+	h.balancer.Update(cfg.Upstreams)
+}
+
+func (h *GeminiHandler) defaultMaxTokens() int {
+	h.mu.RLock()
+	cfg := h.cfg
+	h.mu.RUnlock()
+	if cfg == nil || cfg.DefaultMaxTokens <= 0 {
+		return 4096
+	}
+	return cfg.DefaultMaxTokens
 }
 
 // Gemini API types
@@ -229,6 +249,7 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 	}
 
 	apiType := upstream.GetAPIType()
+	defaultMaxTokens := h.defaultMaxTokens()
 
 	var url string
 	var modifiedBody []byte
@@ -250,7 +271,7 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 
 	case config.APITypeAnthropic:
 		// Convert to Anthropic format
-		bodyMap = convertGeminiToAnthropicRequest(bodyMap, h.cfg.DefaultMaxTokens)
+		bodyMap = convertGeminiToAnthropicRequest(bodyMap, defaultMaxTokens)
 		bodyMap["model"] = model
 		if isStream {
 			bodyMap["stream"] = true
@@ -874,6 +895,11 @@ func NewGeminiCompatHandler(cfg *config.Config) *GeminiCompatHandler {
 	return &GeminiCompatHandler{
 		handler: NewGeminiHandler(cfg),
 	}
+}
+
+// UpdateConfig updates the handler's configuration
+func (h *GeminiCompatHandler) UpdateConfig(cfg *config.Config) {
+	h.handler.UpdateConfig(cfg)
 }
 
 func (h *GeminiCompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

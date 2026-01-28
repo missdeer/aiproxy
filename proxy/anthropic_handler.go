@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/missdeer/aiproxy/balancer"
 	"github.com/missdeer/aiproxy/config"
@@ -19,6 +20,7 @@ type Handler struct {
 	cfg      *config.Config
 	balancer *balancer.WeightedRoundRobin
 	client   *http.Client
+	mu       sync.RWMutex
 }
 
 func NewHandler(cfg *config.Config) *Handler {
@@ -27,6 +29,14 @@ func NewHandler(cfg *config.Config) *Handler {
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
 		client:   &http.Client{},
 	}
+}
+
+// UpdateConfig updates the handler's configuration
+func (h *Handler) UpdateConfig(cfg *config.Config) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cfg = cfg
+	h.balancer.Update(cfg.Upstreams)
 }
 
 type MessageRequest struct {

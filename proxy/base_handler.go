@@ -3,6 +3,7 @@ package proxy
 import (
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/missdeer/aiproxy/balancer"
 	"github.com/missdeer/aiproxy/config"
@@ -13,6 +14,7 @@ type BaseHandler struct {
 	Cfg      *config.Config
 	Balancer *balancer.WeightedRoundRobin
 	Client   *http.Client
+	mu       sync.RWMutex
 }
 
 // NewBaseHandler creates a new BaseHandler with shared components
@@ -22,6 +24,21 @@ func NewBaseHandler(cfg *config.Config) BaseHandler {
 		Balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
 		Client:   &http.Client{},
 	}
+}
+
+// UpdateConfig updates the handler's configuration
+func (b *BaseHandler) UpdateConfig(cfg *config.Config) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.Cfg = cfg
+	b.Balancer.Update(cfg.Upstreams)
+}
+
+// GetConfig returns the current configuration (thread-safe)
+func (b *BaseHandler) GetConfig() *config.Config {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.Cfg
 }
 
 // FilterAndOrderUpstreams returns upstreams that support the given model,

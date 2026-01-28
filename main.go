@@ -4,6 +4,9 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/missdeer/aiproxy/config"
 	"github.com/missdeer/aiproxy/proxy"
@@ -14,10 +17,13 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "Path to configuration file")
 	flag.Parse()
 
-	cfg, err := config.Load(*configPath)
+	// Create configuration manager
+	cfgManager, err := config.NewManager(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+
+	cfg := cfgManager.Get()
 
 	// Configure rotating file logging if log file is specified
 	if cfg.Log.File != "" {
@@ -35,16 +41,42 @@ func main() {
 		log.Printf("  - %s (weight: %d)", u.Name, u.Weight)
 	}
 
+	// Create handlers
 	handler := proxy.NewHandler(cfg)
 	openaiHandler := proxy.NewOpenAIHandler(cfg)
 	responsesHandler := proxy.NewResponsesHandler(cfg)
 	geminiHandler := proxy.NewGeminiCompatHandler(cfg)
+
+	// Register reload callback to update all handlers
+	cfgManager.OnReload(func(newCfg *config.Config) {
+		handler.UpdateConfig(newCfg)
+		openaiHandler.UpdateConfig(newCfg)
+		responsesHandler.UpdateConfig(newCfg)
+		geminiHandler.UpdateConfig(newCfg)
+	})
+
+	// Start watching config file for changes
+	if err := cfgManager.StartWatching(); err != nil {
+		log.Printf("[WARNING] Failed to start config watcher: %v", err)
+	} else {
+		defer cfgManager.StopWatching()
+	}
 
 	http.Handle("/v1/messages", handler)
 	http.Handle("/v1/chat/completions", openaiHandler)
 	http.Handle("/v1/responses", responsesHandler)
 	http.Handle("/v1beta/models/", geminiHandler)
 	http.Handle("/v1/models/", geminiHandler)
+
+	// Handle graceful shutdown
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		log.Println("Shutting down...")
+		cfgManager.StopWatching()
+		os.Exit(0)
+	}()
 
 	addr := cfg.Bind + cfg.Listen
 	log.Printf("Starting proxy server on %s", addr)
