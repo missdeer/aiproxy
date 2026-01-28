@@ -23,6 +23,7 @@ type WeightedRoundRobin struct {
 	weights   []int
 	states    map[string]*upstreamState
 	current   int
+	cw        int // current weight for weighted round-robin
 	gcd       int
 	maxWeight int
 	mu        sync.Mutex
@@ -153,16 +154,15 @@ func (w *WeightedRoundRobin) Next() *config.Upstream {
 		return &w.upstreams[0]
 	}
 
-	cw := 0
 	for {
 		w.current = (w.current + 1) % len(w.upstreams)
 		if w.current == 0 {
-			cw = cw - w.gcd
-			if cw <= 0 {
-				cw = w.maxWeight
+			w.cw = w.cw - w.gcd
+			if w.cw <= 0 {
+				w.cw = w.maxWeight
 			}
 		}
-		if w.weights[w.current] >= cw {
+		if w.weights[w.current] >= w.cw {
 			return &w.upstreams[w.current]
 		}
 	}
