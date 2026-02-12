@@ -35,22 +35,22 @@ upstreams:
     # Model name mappings for this upstream
     # Key: client model name, Value: upstream model name
     model_mappings:
-      "claude-4-5-haiku": "claude-haiku-4-5-20251001"
-      "claude-4-5-haiku-thinking": "claude-haiku-4-5-20251001-thinking"
-      "claude-4-5-opus": "claude-opus-4-5-20251101"
-      "claude-4-5-opus-thinking": "claude-opus-4-5-20251101-thinking"
-      "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
-      "claude-4-5-sonnet-thinking": "claude-sonnet-4-5-20250929-thinking"
+      "claude-haiku-4-5": "claude-haiku-4-5-20251001"
+      "claude-haiku-4-5-thinking": "claude-haiku-4-5-20251001-thinking"
+      "claude-opus-4-5": "claude-opus-4-5-20251101"
+      "claude-opus-4-5-thinking": "claude-opus-4-5-20251101-thinking"
+      "claude-sonnet-4-5": "claude-sonnet-4-5-20250929"
+      "claude-sonnet-4-5-thinking": "claude-sonnet-4-5-20250929-thinking"
     # Available models (client model names, i.e., keys in model_mappings)
     # Only requests for these models will be routed to this upstream
     # If not specified, all models are accepted
     available_models:
-      - "claude-4-5-haiku"
-      - "claude-4-5-haiku-thinking"
-      - "claude-4-5-sonnet"
-      - "claude-4-5-sonnet-thinking"
-      - "claude-4-5-opus"
-      - "claude-4-5-opus-thinking"
+      - "claude-haiku-4-5"
+      - "claude-haiku-4-5-thinking"
+      - "claude-sonnet-4-5"
+      - "claude-sonnet-4-5-thinking"
+      - "claude-opus-4-5"
+      - "claude-opus-4-5-thinking"
 
   - name: "HotaruAPI"
     base_url: "https://api.hotaruapi.top"
@@ -58,15 +58,15 @@ upstreams:
     weight: 5
     api_type: "anthropic"
     model_mappings:
-      "claude-4-5-haiku": "claude-haiku-4-5-20251001"
-      "claude-4-5-opus": "claude-opus-4-5-20251101"
-      "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
-      "claude-4-5-sonnet-thinking": "claude-sonnet-4-5-20250929-thinking"
+      "claude-haiku-4-5": "claude-haiku-4-5-20251001"
+      "claude-opus-4-5": "claude-opus-4-5-20251101"
+      "claude-sonnet-4-5": "claude-sonnet-4-5-20250929"
+      "claude-sonnet-4-5-thinking": "claude-sonnet-4-5-20250929-thinking"
     available_models:
-      - "claude-4-5-haiku"
-      - "claude-4-5-sonnet"
-      - "claude-4-5-sonnet-thinking"
-      - "claude-4-5-opus"
+      - "claude-haiku-4-5"
+      - "claude-sonnet-4-5"
+      - "claude-sonnet-4-5-thinking"
+      - "claude-opus-4-5"
 
   - name: "Nyxar API"
     base_url: "https://api.nyxar.org"
@@ -74,13 +74,13 @@ upstreams:
     weight: 5
     api_type: "anthropic"
     model_mappings:
-      "claude-4-5-haiku": "claude-haiku-4-5-20251001"
-      "claude-4-5-opus": "claude-opus-4-5-20251101"
-      "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
+      "claude-haiku-4-5": "claude-haiku-4-5-20251001"
+      "claude-opus-4-5": "claude-opus-4-5-20251101"
+      "claude-sonnet-4-5": "claude-sonnet-4-5-20250929"
     available_models:
-      - "claude-4-5-haiku"
-      - "claude-4-5-sonnet"
-      - "claude-4-5-opus"
+      - "claude-haiku-4-5"
+      - "claude-sonnet-4-5"
+      - "claude-opus-4-5"
       
   - name: "Huan API"
     base_url: "https://ai.huan666.de"
@@ -88,11 +88,11 @@ upstreams:
     weight: 1
     api_type: "anthropic"
     model_mappings:
-      "claude-4-5-haiku": "claude-haiku-4-5-20251001"
-      "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
+      "claude-haiku-4-5": "claude-haiku-4-5-20251001"
+      "claude-sonnet-4-5": "claude-sonnet-4-5-20250929"
     available_models:
-      - "claude-4-5-haiku"
-      - "claude-4-5-sonnet"
+      - "claude-haiku-4-5"
+      - "claude-sonnet-4-5"
 
   - name: "123nhh"
     base_url: "https://new.123nhh.xyz"
@@ -100,11 +100,11 @@ upstreams:
     weight: 1
     api_type: "anthropic"
     model_mappings:
-      "claude-4-5-opus-thinking": "gemini-claude-opus-4-5-thinking"
-      "claude-4-5-sonnet": "gemini-claude-sonnet-4-5"
+      "claude-opus-4-5-thinking": "gemini-claude-opus-4-5-thinking"
+      "claude-sonnet-4-5": "gemini-claude-sonnet-4-5"
     available_models:
-      - "claude-4-5-opus-thinking"
-      - "claude-4-5-sonnet"
+      - "claude-opus-4-5-thinking"
+      - "claude-sonnet-4-5"
       
   - name: "鸢北的公益站"
     base_url: "https://api.nlvps.hidns.co"
@@ -112,10 +112,53 @@ upstreams:
     weight: 10
     api_type: "anthropic"
     model_mappings:
-      "claude-4-5-sonnet": "claude-sonnet-4-5-20250929"
+      "claude-sonnet-4-5": "claude-sonnet-4-5-20250929"
     available_models:
-      - "claude-4-5-sonnet"
-
+      - "claude-sonnet-4-5"
+                  
+  - name: "黑与白"
+    base_url: "https://ai.hybgzs.com/claude"
+    token: "sk-"
+    weight: 5
+    api_type: "anthropic"
+    available_models:
+      - "claude-opus-4.6"
+      - "claude-opus-4.6-think"                     
+      
+  - name: "摸鱼公益"
+    base_url: "https://clove.cc.cd"
+    token: "sk-"
+    weight: 5
+    api_type: "anthropic"
+    available_models:
+      - "claude-opus-4.6"
+      - "claude-sonnet-4.5"
+                                 
+  - name: "elysiver"
+    base_url: "https://elysiver.h-e.top"
+    token: "sk-"
+    weight: 5
+    api_type: "anthropic"       
+    model_mappings:
+      "claude-sonnet-4-5": "claude-4.5-sonnet-real"
+    available_models:
+      - "claude-sonnet-4-5"       
+      
+  - name: "FreeDuckCoding"
+    base_url: "https://free.duckcoding.com"
+    token: "sk-"
+    weight: 5
+    api_type: "anthropic"
+    model_mappings:
+      "claude-sonnet-4-5-thinking": "claude-sonnet-4-5-20250929-thinking"       
+      "claude-sonnet-4-5": "claude-sonnet-4-5-20250929"
+      "claude-haiku-4-5": "claude-haiku-4-5-20251001"
+    available_models:
+      - "claude-haiku-4-5"
+      - "claude-sonnet-4-5"
+      - "claude-sonnet-4-5-thinking"
+      
+      
   # Example OpenAI-compatible upstream
   # Use api_type: "openai" for OpenAI-compatible services
   - name: "OpenAI Compatible"
