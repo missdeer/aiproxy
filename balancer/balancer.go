@@ -53,9 +53,13 @@ func NewWeightedRoundRobin(upstreams []config.Upstream) *WeightedRoundRobin {
 	weights := make([]int, len(enabledUpstreams))
 	maxWeight := 0
 	for i, u := range enabledUpstreams {
-		weights[i] = u.Weight
-		if u.Weight > maxWeight {
-			maxWeight = u.Weight
+		w := u.Weight
+		if w <= 0 {
+			w = 1
+		}
+		weights[i] = w
+		if w > maxWeight {
+			maxWeight = w
 		}
 	}
 
@@ -192,17 +196,16 @@ func (w *WeightedRoundRobin) NextMatching(matches func(*config.Upstream) bool) *
 		return nil
 	}
 
-	// Calculate total weight sum to ensure we cover a full weighted cycle
+	// Save state so we can restore on no-match to avoid biasing future calls
+	savedCurrent := w.current
+	savedCw := w.cw
+
+	// A full WRR output cycle produces exactly sum(weights)/gcd selections.
 	totalWeight := 0
 	for _, wt := range w.weights {
 		totalWeight += wt
 	}
-
-	// Try enough iterations to cover a full weighted round-robin cycle
-	maxIterations := totalWeight
-	if maxIterations < len(w.upstreams) {
-		maxIterations = len(w.upstreams)
-	}
+	maxIterations := totalWeight / w.gcd
 
 	for i := 0; i < maxIterations; i++ {
 		next := w.nextLocked()
@@ -210,6 +213,10 @@ func (w *WeightedRoundRobin) NextMatching(matches func(*config.Upstream) bool) *
 			return next
 		}
 	}
+
+	// No match found - restore state to avoid biasing future calls
+	w.current = savedCurrent
+	w.cw = savedCw
 
 	return nil
 }
@@ -225,17 +232,16 @@ func (w *WeightedRoundRobin) NextForModel(model string) *config.Upstream {
 		return nil
 	}
 
-	// Calculate total weight sum to ensure we cover a full weighted cycle
+	// Save state so we can restore on no-match to avoid biasing future calls
+	savedCurrent := w.current
+	savedCw := w.cw
+
+	// A full WRR output cycle produces exactly sum(weights)/gcd selections.
 	totalWeight := 0
 	for _, wt := range w.weights {
 		totalWeight += wt
 	}
-
-	// Try enough iterations to cover a full weighted round-robin cycle
-	maxIterations := totalWeight
-	if maxIterations < len(w.upstreams) {
-		maxIterations = len(w.upstreams)
-	}
+	maxIterations := totalWeight / w.gcd
 
 	for i := 0; i < maxIterations; i++ {
 		next := w.nextLocked()
@@ -243,6 +249,10 @@ func (w *WeightedRoundRobin) NextForModel(model string) *config.Upstream {
 			return next
 		}
 	}
+
+	// No match found - restore state to avoid biasing future calls
+	w.current = savedCurrent
+	w.cw = savedCw
 
 	return nil
 }
@@ -302,9 +312,13 @@ func (w *WeightedRoundRobin) Update(upstreams []config.Upstream) {
 	weights := make([]int, len(enabledUpstreams))
 	maxWeight := 0
 	for i, u := range enabledUpstreams {
-		weights[i] = u.Weight
-		if u.Weight > maxWeight {
-			maxWeight = u.Weight
+		wt := u.Weight
+		if wt <= 0 {
+			wt = 1
+		}
+		weights[i] = wt
+		if wt > maxWeight {
+			maxWeight = wt
 		}
 	}
 
@@ -317,6 +331,7 @@ func (w *WeightedRoundRobin) Update(upstreams []config.Upstream) {
 	w.weights = weights
 	w.states = newStates
 	w.current = -1
+	w.cw = 0
 	w.gcd = gcd
 	w.maxWeight = maxWeight
 }
