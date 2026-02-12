@@ -519,18 +519,68 @@ func convertInputToAnthropicMessages(input any) []map[string]any {
 	case []any:
 		for _, item := range v {
 			if itemMap, ok := item.(map[string]any); ok {
-				role, _ := itemMap["role"].(string)
-				content := itemMap["content"]
+				itemType, _ := itemMap["type"].(string)
 
-				if role == "system" {
-					continue // System is handled separately in Anthropic
-				}
+				switch itemType {
+				case "function_call":
+					// Convert function_call to assistant message with tool_use content block
+					callID, _ := itemMap["call_id"].(string)
+					name, _ := itemMap["name"].(string)
+					arguments, _ := itemMap["arguments"].(string)
 
-				msg := map[string]any{
-					"role":    role,
-					"content": content,
+					// Parse arguments string to JSON object for Anthropic
+					var inputObj any
+					if err := json.Unmarshal([]byte(arguments), &inputObj); err != nil {
+						inputObj = map[string]any{}
+					}
+
+					messages = append(messages, map[string]any{
+						"role": "assistant",
+						"content": []map[string]any{
+							{
+								"type":  "tool_use",
+								"id":    callID,
+								"name":  name,
+								"input": inputObj,
+							},
+						},
+					})
+
+				case "function_call_output":
+					// Convert function_call_output to user message with tool_result content block
+					callID, _ := itemMap["call_id"].(string)
+					output, _ := itemMap["output"].(string)
+
+					messages = append(messages, map[string]any{
+						"role": "user",
+						"content": []map[string]any{
+							{
+								"type":        "tool_result",
+								"tool_use_id": callID,
+								"content":     output,
+							},
+						},
+					})
+
+				case "item_reference":
+					// Skip item references
+					continue
+
+				default:
+					role, _ := itemMap["role"].(string)
+					if role == "" {
+						continue
+					}
+					if role == "system" {
+						continue // System is handled separately in Anthropic
+					}
+					content := itemMap["content"]
+					msg := map[string]any{
+						"role":    role,
+						"content": content,
+					}
+					messages = append(messages, msg)
 				}
-				messages = append(messages, msg)
 			}
 		}
 	}
@@ -550,14 +600,58 @@ func convertInputToChatMessages(input any) []map[string]any {
 	case []any:
 		for _, item := range v {
 			if itemMap, ok := item.(map[string]any); ok {
-				role, _ := itemMap["role"].(string)
-				content := itemMap["content"]
+				itemType, _ := itemMap["type"].(string)
 
-				msg := map[string]any{
-					"role":    role,
-					"content": content,
+				switch itemType {
+				case "function_call":
+					// Convert function_call to assistant message with tool_calls
+					callID, _ := itemMap["call_id"].(string)
+					name, _ := itemMap["name"].(string)
+					arguments, _ := itemMap["arguments"].(string)
+
+					messages = append(messages, map[string]any{
+						"role": "assistant",
+						"tool_calls": []map[string]any{
+							{
+								"id":   callID,
+								"type": "function",
+								"function": map[string]any{
+									"name":      name,
+									"arguments": arguments,
+								},
+							},
+						},
+					})
+
+				case "function_call_output":
+					// Convert function_call_output to tool role message
+					callID, _ := itemMap["call_id"].(string)
+					output, _ := itemMap["output"].(string)
+
+					messages = append(messages, map[string]any{
+						"role":         "tool",
+						"tool_call_id": callID,
+						"content":      output,
+					})
+
+				case "item_reference":
+					// Skip item references - they are not convertible to chat messages
+					continue
+
+				default:
+					// Handle message-type items (type "message" or items with role)
+					role, _ := itemMap["role"].(string)
+					if role == "" {
+						// Skip items without a valid role to avoid sending empty role
+						continue
+					}
+					content := itemMap["content"]
+
+					messages = append(messages, map[string]any{
+						"role":    role,
+						"content": content,
+					})
 				}
-				messages = append(messages, msg)
 			}
 		}
 	}
