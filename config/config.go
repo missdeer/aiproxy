@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"sync"
+	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,6 +18,7 @@ const (
 	APITypeOpenAI    APIType = "openai"    // /v1/chat/completions
 	APITypeGemini    APIType = "gemini"    // /v1beta/models/*/generateContent
 	APITypeResponses APIType = "responses" // /v1/responses
+	APITypeCodex     APIType = "codex"     // chatgpt.com/backend-api/codex/responses (OAuth)
 )
 
 type Upstream struct {
@@ -27,7 +30,8 @@ type Upstream struct {
 	ModelMappings   ModelMapping `yaml:"model_mappings"`
 	AvailableModels []string     `yaml:"available_models"`
 	MustStream      bool         `yaml:"must_stream"`
-	APIType         APIType      `yaml:"api_type"` // "anthropic", "openai", "gemini", or "responses"
+	APIType         APIType      `yaml:"api_type"`   // "anthropic", "openai", "gemini", "responses", or "codex"
+	AuthFiles       []string     `yaml:"auth_files"` // Paths to auth JSON files (used by codex api_type, round-robin)
 }
 
 // IsEnabled returns whether this upstream is enabled (defaults to true)
@@ -54,6 +58,38 @@ func (u *Upstream) MapModel(model string) string {
 		return mapped
 	}
 	return model
+}
+
+// NextAuthFile returns the next auth file path using round-robin.
+// Safe for concurrent use. Uses upstream name as the key for the counter.
+func (u *Upstream) NextAuthFile() string {
+	if len(u.AuthFiles) == 0 {
+		return ""
+	}
+	if len(u.AuthFiles) == 1 {
+		return u.AuthFiles[0]
+	}
+	idx := nextAuthFileIndex(u.Name, len(u.AuthFiles))
+	return u.AuthFiles[idx]
+}
+
+// Global round-robin counters for auth files, keyed by upstream name.
+var (
+	authFileCounterMu sync.Mutex
+	authFileCounters  = make(map[string]*uint64)
+)
+
+func nextAuthFileIndex(name string, n int) int {
+	authFileCounterMu.Lock()
+	ctr, ok := authFileCounters[name]
+	if !ok {
+		var zero uint64
+		ctr = &zero
+		authFileCounters[name] = ctr
+	}
+	authFileCounterMu.Unlock()
+	idx := atomic.AddUint64(ctr, 1) - 1
+	return int(idx % uint64(n))
 }
 
 func (u *Upstream) SupportsModel(model string) bool {

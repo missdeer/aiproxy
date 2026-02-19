@@ -246,6 +246,14 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 	// Convert request format based on API type
 	var url string
 	switch apiType {
+	case config.APITypeCodex:
+		// Codex uses Responses API format natively - no conversion needed
+		// ForwardToCodex handles auth, headers, and request forwarding
+		modifiedBody, err := json.Marshal(bodyMap)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		return ForwardToCodex(h.client, upstream, modifiedBody, clientWantsStream)
 	case config.APITypeAnthropic:
 		bodyMap = convertResponsesToAnthropicRequest(bodyMap)
 		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"

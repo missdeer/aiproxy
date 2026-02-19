@@ -260,6 +260,42 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 	var err error
 
 	switch apiType {
+	case config.APITypeCodex:
+		// Convert Gemini to Responses format, then forward to Codex
+		responsesBody := convertGeminiToResponsesRequest(bodyMap)
+		responsesBody["model"] = model
+		if isStream {
+			responsesBody["stream"] = true
+		}
+		modifiedBody, err = json.Marshal(responsesBody)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		// ForwardToCodex returns Responses-format data. Convert to Gemini format.
+		status, respBody, respHeaders, err := ForwardToCodex(h.client, upstream, modifiedBody, isStream)
+		if err != nil {
+			return status, nil, nil, err
+		}
+		if status >= 400 {
+			return status, respBody, respHeaders, nil
+		}
+		if isStream {
+			// Convert Codex SSE (Responses-format) to Gemini streaming format
+			geminiResp, err := h.convertStreamToGemini(bytes.NewReader(respBody), config.APITypeResponses)
+			if err != nil {
+				return 0, nil, nil, fmt.Errorf("failed to convert codex stream to gemini: %w", err)
+			}
+			respHeaders.Set("Content-Type", "application/json")
+			return status, geminiResp, respHeaders, nil
+		}
+		// Non-stream: convert Responses JSON to Gemini format
+		geminiResp, err := convertToGeminiResponse(respBody, config.APITypeResponses)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("failed to convert codex response to gemini: %w", err)
+		}
+		respHeaders.Set("Content-Type", "application/json")
+		return status, geminiResp, respHeaders, nil
+
 	case config.APITypeGemini:
 		// Native Gemini upstream
 		action := "generateContent"
@@ -636,6 +672,13 @@ func convertToGeminiResponse(body []byte, apiType config.APIType) ([]byte, error
 	if apiType == config.APITypeAnthropic {
 		return convertAnthropicToGemini(body)
 	}
+	if apiType == config.APITypeResponses {
+		openAIBody, err := convertResponsesToOpenAIChat(body)
+		if err != nil {
+			return nil, err
+		}
+		return convertOpenAIToGemini(openAIBody)
+	}
 	return convertOpenAIToGemini(body)
 }
 
@@ -789,6 +832,33 @@ func (h *GeminiHandler) convertStreamToGemini(reader io.Reader, apiType config.A
 				if usage, ok := event["usage"].(map[string]any); ok {
 					if output, ok := usage["output_tokens"].(float64); ok {
 						outputTokens = int(output)
+					}
+				}
+			}
+		} else if apiType == config.APITypeResponses {
+			eventType := currentEventType
+			if eventType == "" {
+				if t, ok := event["type"].(string); ok {
+					eventType = t
+				}
+			}
+			switch eventType {
+			case "response.output_text.delta":
+				if delta, ok := event["delta"].(string); ok {
+					textContent.WriteString(delta)
+				}
+			case "response.completed":
+				if resp, ok := event["response"].(map[string]any); ok {
+					if m, ok := resp["model"].(string); ok {
+						model = m
+					}
+					if usage, ok := resp["usage"].(map[string]any); ok {
+						if input, ok := usage["input_tokens"].(float64); ok {
+							inputTokens = int(input)
+						}
+						if output, ok := usage["output_tokens"].(float64); ok {
+							outputTokens = int(output)
+						}
 					}
 				}
 			}

@@ -578,6 +578,12 @@ func convertResponseToAnthropic(body []byte, apiType config.APIType) ([]byte, er
 		return convertOpenAIResponseToAnthropic(body)
 	case config.APITypeGemini:
 		return convertGeminiResponseToAnthropic(body)
+	case config.APITypeResponses:
+		openAIBody, err := convertResponsesToOpenAIChat(body)
+		if err != nil {
+			return nil, err
+		}
+		return convertOpenAIResponseToAnthropic(openAIBody)
 	default:
 		return body, nil
 	}
@@ -930,6 +936,39 @@ func (h *Handler) convertStreamToAnthropic(reader io.Reader, apiType config.APIT
 						},
 					}
 					chunks = appendSSEEvent(chunks, "content_block_delta", evt)
+				}
+			}
+		case config.APITypeResponses:
+			eventType, _ := event["type"].(string)
+			switch eventType {
+			case "response.output_text.delta":
+				if delta, ok := event["delta"].(string); ok && delta != "" {
+					textContent.WriteString(delta)
+					if !toNonStream {
+						evt := map[string]any{
+							"type":  "content_block_delta",
+							"index": 0,
+							"delta": map[string]any{
+								"type": "text_delta",
+								"text": delta,
+							},
+						}
+						chunks = appendSSEEvent(chunks, "content_block_delta", evt)
+					}
+				}
+			case "response.completed":
+				if resp, ok := event["response"].(map[string]any); ok {
+					if m, ok := resp["model"].(string); ok {
+						model = m
+					}
+					if usage, ok := resp["usage"].(map[string]any); ok {
+						if in, ok := usage["input_tokens"].(float64); ok {
+							inputTokens = int(in)
+						}
+						if out, ok := usage["output_tokens"].(float64); ok {
+							outputTokens = int(out)
+						}
+					}
 				}
 			}
 		}

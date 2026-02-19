@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/missdeer/aiproxy/config"
@@ -360,4 +361,193 @@ func TestConvertResponseToOpenAI(t *testing.T) {
 
 func strPtr(s string) *string {
 	return &s
+}
+
+func TestConvertResponseToAnthropic_FromResponses(t *testing.T) {
+	responsesBody := []byte(`{
+		"id":"resp_123",
+		"object":"response",
+		"created_at":123,
+		"model":"gpt-4.1",
+		"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello from responses"}]}],
+		"usage":{"input_tokens":3,"output_tokens":5,"total_tokens":8}
+	}`)
+
+	got, err := convertResponseToAnthropic(responsesBody, config.APITypeResponses)
+	if err != nil {
+		t.Fatalf("convertResponseToAnthropic() error = %v", err)
+	}
+
+	var anthropicResp map[string]any
+	if err := json.Unmarshal(got, &anthropicResp); err != nil {
+		t.Fatalf("failed to unmarshal anthropic response: %v", err)
+	}
+
+	if anthropicResp["type"] != "message" {
+		t.Fatalf("type = %v, want message", anthropicResp["type"])
+	}
+	content, ok := anthropicResp["content"].([]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("content missing: %#v", anthropicResp["content"])
+	}
+	first, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("content[0] is not object: %#v", content[0])
+	}
+	if first["text"] != "Hello from responses" {
+		t.Fatalf("content text = %v, want %q", first["text"], "Hello from responses")
+	}
+}
+
+func TestConvertToGeminiResponse_FromResponses(t *testing.T) {
+	responsesBody := []byte(`{
+		"id":"resp_123",
+		"object":"response",
+		"created_at":123,
+		"model":"gpt-4.1",
+		"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello from responses"}]}],
+		"usage":{"input_tokens":3,"output_tokens":5,"total_tokens":8}
+	}`)
+
+	got, err := convertToGeminiResponse(responsesBody, config.APITypeResponses)
+	if err != nil {
+		t.Fatalf("convertToGeminiResponse() error = %v", err)
+	}
+
+	var geminiResp GeminiResponse
+	if err := json.Unmarshal(got, &geminiResp); err != nil {
+		t.Fatalf("failed to unmarshal gemini response: %v", err)
+	}
+	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+		t.Fatalf("missing gemini text parts: %#v", geminiResp)
+	}
+	if geminiResp.Candidates[0].Content.Parts[0].Text != "Hello from responses" {
+		t.Fatalf("gemini text = %q, want %q", geminiResp.Candidates[0].Content.Parts[0].Text, "Hello from responses")
+	}
+}
+
+func TestConvertStreamToOpenAI_FromResponses(t *testing.T) {
+	sse := strings.Join([]string{
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":"Hello"}`,
+		``,
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":" world"}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"id":"resp_123","model":"gpt-4.1","usage":{"input_tokens":3,"output_tokens":5}}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	h := &OpenAIHandler{}
+	streamOut, err := h.convertStreamToOpenAI(strings.NewReader(sse), config.APITypeResponses, false)
+	if err != nil {
+		t.Fatalf("convertStreamToOpenAI(stream) error = %v", err)
+	}
+	streamText := string(streamOut)
+	if !strings.Contains(streamText, "chat.completion.chunk") {
+		t.Fatalf("stream output missing chunk object: %s", streamText)
+	}
+	if !strings.Contains(streamText, "[DONE]") {
+		t.Fatalf("stream output missing [DONE]: %s", streamText)
+	}
+	if !strings.Contains(streamText, "Hello") {
+		t.Fatalf("stream output missing delta text: %s", streamText)
+	}
+
+	nonStreamOut, err := h.convertStreamToOpenAI(strings.NewReader(sse), config.APITypeResponses, true)
+	if err != nil {
+		t.Fatalf("convertStreamToOpenAI(non-stream) error = %v", err)
+	}
+	var openAIResp OpenAIChatResponse
+	if err := json.Unmarshal(nonStreamOut, &openAIResp); err != nil {
+		t.Fatalf("failed to unmarshal OpenAI response: %v", err)
+	}
+	if len(openAIResp.Choices) == 0 || openAIResp.Choices[0].Message == nil {
+		t.Fatalf("missing OpenAI choices: %#v", openAIResp)
+	}
+	content, ok := openAIResp.Choices[0].Message.Content.(string)
+	if !ok || content != "Hello world" {
+		t.Fatalf("OpenAI content = %#v, want %q", openAIResp.Choices[0].Message.Content, "Hello world")
+	}
+}
+
+func TestConvertStreamToAnthropic_FromResponses(t *testing.T) {
+	sse := strings.Join([]string{
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":"Hello"}`,
+		``,
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":" world"}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"id":"resp_123","model":"gpt-4.1","usage":{"input_tokens":3,"output_tokens":5}}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	h := &Handler{}
+	streamOut, err := h.convertStreamToAnthropic(strings.NewReader(sse), config.APITypeResponses, false)
+	if err != nil {
+		t.Fatalf("convertStreamToAnthropic(stream) error = %v", err)
+	}
+	streamText := string(streamOut)
+	if !strings.Contains(streamText, "content_block_delta") {
+		t.Fatalf("stream output missing content delta events: %s", streamText)
+	}
+	if !strings.Contains(streamText, "Hello") {
+		t.Fatalf("stream output missing delta text: %s", streamText)
+	}
+
+	nonStreamOut, err := h.convertStreamToAnthropic(strings.NewReader(sse), config.APITypeResponses, true)
+	if err != nil {
+		t.Fatalf("convertStreamToAnthropic(non-stream) error = %v", err)
+	}
+	var anthropicResp map[string]any
+	if err := json.Unmarshal(nonStreamOut, &anthropicResp); err != nil {
+		t.Fatalf("failed to unmarshal Anthropic response: %v", err)
+	}
+	contentAny, ok := anthropicResp["content"].([]any)
+	if !ok || len(contentAny) == 0 {
+		t.Fatalf("anthropic content missing: %#v", anthropicResp["content"])
+	}
+	first, ok := contentAny[0].(map[string]any)
+	if !ok || first["text"] != "Hello world" {
+		t.Fatalf("anthropic content text = %#v, want %q", first["text"], "Hello world")
+	}
+}
+
+func TestConvertStreamToGemini_FromResponses(t *testing.T) {
+	sse := strings.Join([]string{
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":"Hello"}`,
+		``,
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":" world"}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"id":"resp_123","model":"gpt-4.1","usage":{"input_tokens":3,"output_tokens":5}}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	h := &GeminiHandler{}
+	out, err := h.convertStreamToGemini(strings.NewReader(sse), config.APITypeResponses)
+	if err != nil {
+		t.Fatalf("convertStreamToGemini() error = %v", err)
+	}
+	var geminiResp GeminiResponse
+	if err := json.Unmarshal(out, &geminiResp); err != nil {
+		t.Fatalf("failed to unmarshal Gemini response: %v", err)
+	}
+	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+		t.Fatalf("missing gemini candidates/parts: %#v", geminiResp)
+	}
+	if geminiResp.Candidates[0].Content.Parts[0].Text != "Hello world" {
+		t.Fatalf("gemini text = %q, want %q", geminiResp.Candidates[0].Content.Parts[0].Text, "Hello world")
+	}
 }

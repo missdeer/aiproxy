@@ -232,6 +232,39 @@ func (h *OpenAIHandler) forwardRequest(upstream config.Upstream, model string, o
 
 	// Convert OpenAI request to target API format
 	switch apiType {
+	case config.APITypeCodex:
+		// Convert OpenAI chat to Responses format, then forward to Codex
+		responsesBody := convertOpenAIChatToResponsesRequest(bodyMap)
+		modifiedBody, err = json.Marshal(responsesBody)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		// ForwardToCodex returns Responses-format data (JSON if non-stream, SSE if stream).
+		// Convert it to OpenAI format before returning.
+		status, respBody, respHeaders, err := ForwardToCodex(h.client, upstream, modifiedBody, clientWantsStream)
+		if err != nil {
+			return status, nil, nil, err
+		}
+		if status >= 400 {
+			return status, respBody, respHeaders, nil
+		}
+		if clientWantsStream {
+			// Codex SSE uses Responses-format events; convert to OpenAI streaming chunks
+			openAIResp, err := h.convertStreamToOpenAI(bytes.NewReader(respBody), config.APITypeResponses, false)
+			if err != nil {
+				return 0, nil, nil, fmt.Errorf("failed to convert codex stream to openai: %w", err)
+			}
+			respHeaders.Set("Content-Type", "text/event-stream")
+			return status, openAIResp, respHeaders, nil
+		}
+		// Non-stream: ForwardToCodex already assembled JSON in Responses format
+		openAIResp, err := convertResponsesToOpenAIChat(respBody)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("failed to convert codex response to openai: %w", err)
+		}
+		respHeaders.Set("Content-Type", "application/json")
+		return status, openAIResp, respHeaders, nil
+
 	case config.APITypeOpenAI:
 		// Native OpenAI - no conversion needed
 		modifiedBody, err = json.Marshal(bodyMap)
@@ -392,15 +425,17 @@ func (h *OpenAIHandler) convertStreamToOpenAI(reader io.Reader, apiType config.A
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
 	var (
-		messageID        string
-		model            string
-		inputTokens      int
-		outputTokens     int
-		textContent      strings.Builder
-		currentEventType string
-		dataBuilder      strings.Builder
-		chunks           []byte
-		stopReason       string
+		messageID         string
+		model             string
+		inputTokens       int
+		outputTokens      int
+		textContent       strings.Builder
+		currentEventType  string
+		dataBuilder       strings.Builder
+		chunks            []byte
+		stopReason        string
+		sentRoleChunk     bool
+		sentTerminalChunk bool
 	)
 
 	messageID = fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
@@ -460,6 +495,7 @@ func (h *OpenAIHandler) convertStreamToOpenAI(reader io.Reader, apiType config.A
 					chunks = append(chunks, []byte("data: ")...)
 					chunks = append(chunks, chunkBytes...)
 					chunks = append(chunks, []byte("\n\n")...)
+					sentRoleChunk = true
 				}
 
 			case "content_block_delta":
@@ -523,6 +559,7 @@ func (h *OpenAIHandler) convertStreamToOpenAI(reader io.Reader, apiType config.A
 					chunks = append(chunks, chunkBytes...)
 					chunks = append(chunks, []byte("\n\n")...)
 					chunks = append(chunks, []byte("data: [DONE]\n\n")...)
+					sentTerminalChunk = true
 				}
 			}
 
@@ -575,6 +612,99 @@ func (h *OpenAIHandler) convertStreamToOpenAI(reader io.Reader, apiType config.A
 			if mv, ok := event["modelVersion"].(string); ok {
 				model = mv
 			}
+
+		case config.APITypeResponses:
+			eventType := currentEventType
+			if eventType == "" {
+				if t, ok := event["type"].(string); ok {
+					eventType = t
+				}
+			}
+
+			switch eventType {
+			case "response.output_text.delta":
+				if text, ok := event["delta"].(string); ok && text != "" {
+					textContent.WriteString(text)
+					if !toNonStream {
+						if !sentRoleChunk {
+							chunk := OpenAIStreamChunk{
+								ID:      messageID,
+								Object:  "chat.completion.chunk",
+								Created: time.Now().Unix(),
+								Model:   model,
+								Choices: []OpenAIChoice{
+									{
+										Index:        0,
+										Delta:        &OpenAIMessage{Role: "assistant"},
+										FinishReason: nil,
+									},
+								},
+							}
+							chunkBytes, _ := json.Marshal(chunk)
+							chunks = append(chunks, []byte("data: ")...)
+							chunks = append(chunks, chunkBytes...)
+							chunks = append(chunks, []byte("\n\n")...)
+							sentRoleChunk = true
+						}
+
+						chunk := OpenAIStreamChunk{
+							ID:      messageID,
+							Object:  "chat.completion.chunk",
+							Created: time.Now().Unix(),
+							Model:   model,
+							Choices: []OpenAIChoice{
+								{
+									Index:        0,
+									Delta:        &OpenAIMessage{Content: text},
+									FinishReason: nil,
+								},
+							},
+						}
+						chunkBytes, _ := json.Marshal(chunk)
+						chunks = append(chunks, []byte("data: ")...)
+						chunks = append(chunks, chunkBytes...)
+						chunks = append(chunks, []byte("\n\n")...)
+					}
+				}
+			case "response.completed":
+				stopReason = "stop"
+				if responseObj, ok := event["response"].(map[string]any); ok {
+					if m, ok := responseObj["model"].(string); ok {
+						model = m
+					}
+					if usage, ok := responseObj["usage"].(map[string]any); ok {
+						if in, ok := usage["input_tokens"].(float64); ok {
+							inputTokens = int(in)
+						}
+						if out, ok := usage["output_tokens"].(float64); ok {
+							outputTokens = int(out)
+						}
+					}
+				}
+
+				if !toNonStream && !sentTerminalChunk {
+					reason := "stop"
+					chunk := OpenAIStreamChunk{
+						ID:      messageID,
+						Object:  "chat.completion.chunk",
+						Created: time.Now().Unix(),
+						Model:   model,
+						Choices: []OpenAIChoice{
+							{
+								Index:        0,
+								Delta:        &OpenAIMessage{},
+								FinishReason: &reason,
+							},
+						},
+					}
+					chunkBytes, _ := json.Marshal(chunk)
+					chunks = append(chunks, []byte("data: ")...)
+					chunks = append(chunks, chunkBytes...)
+					chunks = append(chunks, []byte("\n\n")...)
+					chunks = append(chunks, []byte("data: [DONE]\n\n")...)
+					sentTerminalChunk = true
+				}
+			}
 		}
 	}
 
@@ -615,6 +745,9 @@ func (h *OpenAIHandler) convertStreamToOpenAI(reader io.Reader, apiType config.A
 			if apiType == config.APITypeAnthropic {
 				reason := mapAnthropicStopReason(stopReason)
 				finishReason = &reason
+			} else if apiType == config.APITypeResponses {
+				reason := "stop"
+				finishReason = &reason
 			} else {
 				reason := mapGeminiToOpenAIFinishReason(stopReason)
 				finishReason = &reason
@@ -646,8 +779,11 @@ func (h *OpenAIHandler) convertStreamToOpenAI(reader io.Reader, apiType config.A
 	}
 
 	// Send final done marker if not already sent
-	if apiType == config.APITypeGemini && len(chunks) > 0 {
-		reason := mapGeminiToOpenAIFinishReason(stopReason)
+	if !sentTerminalChunk && (apiType == config.APITypeGemini || apiType == config.APITypeResponses) && len(chunks) > 0 {
+		reason := "stop"
+		if apiType == config.APITypeGemini {
+			reason = mapGeminiToOpenAIFinishReason(stopReason)
+		}
 		chunk := OpenAIStreamChunk{
 			ID:      messageID,
 			Object:  "chat.completion.chunk",

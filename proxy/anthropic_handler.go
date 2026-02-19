@@ -233,6 +233,38 @@ func (h *Handler) forwardRequest(upstream config.Upstream, model string, origina
 
 	// Convert Anthropic request to target API format
 	switch apiType {
+	case config.APITypeCodex:
+		// Convert Anthropic to Responses format, then forward to Codex
+		responsesBody := convertAnthropicToResponsesRequest(bodyMap)
+		modifiedBody, err = json.Marshal(responsesBody)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		// ForwardToCodex returns Responses-format data. Convert to Anthropic format.
+		status, respBody, respHeaders, err := ForwardToCodex(h.client, upstream, modifiedBody, clientWantsStream)
+		if err != nil {
+			return status, nil, nil, err
+		}
+		if status >= 400 {
+			return status, respBody, respHeaders, nil
+		}
+		if clientWantsStream {
+			// Convert Codex SSE (Responses-format) to Anthropic streaming format
+			anthropicResp, err := h.convertStreamToAnthropic(bytes.NewReader(respBody), config.APITypeResponses, false)
+			if err != nil {
+				return 0, nil, nil, fmt.Errorf("failed to convert codex stream to anthropic: %w", err)
+			}
+			respHeaders.Set("Content-Type", "text/event-stream")
+			return status, anthropicResp, respHeaders, nil
+		}
+		// Non-stream: convert Responses JSON to Anthropic format
+		anthropicResp, err := convertResponseToAnthropic(respBody, config.APITypeResponses)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("failed to convert codex response to anthropic: %w", err)
+		}
+		respHeaders.Set("Content-Type", "application/json")
+		return status, anthropicResp, respHeaders, nil
+
 	case config.APITypeAnthropic:
 		// Native Anthropic - no conversion needed
 		modifiedBody, err = json.Marshal(bodyMap)
