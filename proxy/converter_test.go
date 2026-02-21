@@ -489,7 +489,7 @@ func TestConvertStreamToAnthropic_FromResponses(t *testing.T) {
 		``,
 	}, "\n")
 
-	h := &Handler{}
+	h := &AnthropicHandler{}
 	streamOut, err := h.convertStreamToAnthropic(strings.NewReader(sse), config.APITypeResponses, false)
 	if err != nil {
 		t.Fatalf("convertStreamToAnthropic(stream) error = %v", err)
@@ -623,7 +623,7 @@ func TestConvertStreamToAnthropic_FromGeminiWrapped(t *testing.T) {
 		``,
 	}, "\n")
 
-	h := &Handler{}
+	h := &AnthropicHandler{}
 
 	// Streaming mode
 	streamOut, err := h.convertStreamToAnthropic(strings.NewReader(sse), config.APITypeGemini, false)

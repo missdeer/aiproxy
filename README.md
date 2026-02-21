@@ -93,7 +93,7 @@ Start the proxy:
 ./aiproxy -config config.yaml
 ```
 
-The proxy exposes three client-facing endpoints:
+The proxy exposes five client-facing endpoints:
 
 ```bash
 # Anthropic Messages API
@@ -114,6 +114,14 @@ curl http://localhost:8080/v1/responses \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer any-key" \
   -d '{"model": "gpt-4o", "input": "Hello!"}'
+
+# Gemini API (compatible with Google AI Studio SDKs)
+# /v1beta/models/{model}:generateContent
+# /v1/models/{model}:generateContent
+curl http://localhost:8080/v1beta/models/gemini-pro:generateContent \
+  -H "Content-Type: application/json" \
+  -H "x-goog-api-key: any-key" \
+  -d '{"contents": [{"parts": [{"text": "Hello!"}]}]}'
 ```
 
 ## How It Works
