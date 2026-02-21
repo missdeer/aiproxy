@@ -14,11 +14,14 @@ type ModelMapping map[string]string
 type APIType string
 
 const (
-	APITypeAnthropic APIType = "anthropic" // /v1/messages
-	APITypeOpenAI    APIType = "openai"    // /v1/chat/completions
-	APITypeGemini    APIType = "gemini"    // /v1beta/models/*/generateContent
-	APITypeResponses APIType = "responses" // /v1/responses
-	APITypeCodex     APIType = "codex"     // chatgpt.com/backend-api/codex/responses (OAuth)
+	APITypeAnthropic   APIType = "anthropic"   // /v1/messages
+	APITypeOpenAI      APIType = "openai"      // /v1/chat/completions
+	APITypeGemini      APIType = "gemini"      // /v1beta/models/*/generateContent
+	APITypeResponses   APIType = "responses"   // /v1/responses
+	APITypeCodex       APIType = "codex"       // chatgpt.com/backend-api/codex/responses (OAuth)
+	APITypeGeminiCLI   APIType = "geminicli"   // cloudcode-pa.googleapis.com/v1internal:streamGenerateContent (OAuth)
+	APITypeAntigravity APIType = "antigravity" // daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent (OAuth)
+	APITypeClaudeCode  APIType = "claudecode"  // api.anthropic.com/v1/messages (OAuth)
 )
 
 type Upstream struct {

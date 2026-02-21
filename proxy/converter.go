@@ -821,12 +821,19 @@ func extractOpenAIStreamContent(event map[string]any) (content string, model str
 	return
 }
 
-// extractGeminiStreamData extracts texts and metadata from Gemini streaming event
+// extractGeminiStreamData extracts texts and metadata from Gemini streaming event.
+// Handles both root-level candidates and response-wrapped payloads ({"response": {...}}).
 func extractGeminiStreamData(event map[string]any) (texts []string, model string, inputTokens, outputTokens int) {
-	if mv, ok := event["modelVersion"].(string); ok {
+	// Unwrap response-wrapped payloads (Gemini CLI / Antigravity may wrap under "response")
+	data := event
+	if resp, ok := event["response"].(map[string]any); ok {
+		data = resp
+	}
+
+	if mv, ok := data["modelVersion"].(string); ok {
 		model = mv
 	}
-	if usage, ok := event["usageMetadata"].(map[string]any); ok {
+	if usage, ok := data["usageMetadata"].(map[string]any); ok {
 		if prompt, ok := usage["promptTokenCount"].(float64); ok {
 			inputTokens = int(prompt)
 		}
@@ -834,7 +841,7 @@ func extractGeminiStreamData(event map[string]any) (texts []string, model string
 			outputTokens = int(candidates)
 		}
 	}
-	candidates, ok := event["candidates"].([]any)
+	candidates, ok := data["candidates"].([]any)
 	if !ok || len(candidates) == 0 {
 		return
 	}

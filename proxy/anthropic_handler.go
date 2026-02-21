@@ -265,6 +265,83 @@ func (h *Handler) forwardRequest(upstream config.Upstream, model string, origina
 		respHeaders.Set("Content-Type", "application/json")
 		return status, anthropicResp, respHeaders, nil
 
+	case config.APITypeGeminiCLI:
+		// Convert Anthropic to Responses format, then forward to Gemini CLI
+		responsesBody := convertAnthropicToResponsesRequest(bodyMap)
+		modifiedBody, err = json.Marshal(responsesBody)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		// ForwardToGeminiCLI returns Responses-format data. Convert to Anthropic format.
+		status, respBody, respHeaders, err := ForwardToGeminiCLI(h.client, upstream, modifiedBody, clientWantsStream)
+		if err != nil {
+			return status, nil, nil, err
+		}
+		if status >= 400 {
+			return status, respBody, respHeaders, nil
+		}
+		if clientWantsStream {
+			// Convert Gemini CLI SSE (native Google format) to Anthropic streaming format
+			anthropicResp, err := h.convertStreamToAnthropic(bytes.NewReader(respBody), config.APITypeGemini, false)
+			if err != nil {
+				return 0, nil, nil, fmt.Errorf("failed to convert geminicli stream to anthropic: %w", err)
+			}
+			respHeaders.Set("Content-Type", "text/event-stream")
+			return status, anthropicResp, respHeaders, nil
+		}
+		// Non-stream: convert Responses JSON to Anthropic format
+		anthropicResp, err := convertResponseToAnthropic(respBody, config.APITypeResponses)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("failed to convert geminicli response to anthropic: %w", err)
+		}
+		respHeaders.Set("Content-Type", "application/json")
+		return status, anthropicResp, respHeaders, nil
+
+	case config.APITypeAntigravity:
+		// Convert Anthropic to Responses format, then forward to Antigravity
+		responsesBody := convertAnthropicToResponsesRequest(bodyMap)
+		modifiedBody, err = json.Marshal(responsesBody)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		// ForwardToAntigravity returns Responses-format data. Convert to Anthropic format.
+		status, respBody, respHeaders, err := ForwardToAntigravity(h.client, upstream, modifiedBody, clientWantsStream)
+		if err != nil {
+			return status, nil, nil, err
+		}
+		if status >= 400 {
+			return status, respBody, respHeaders, nil
+		}
+		if clientWantsStream {
+			// Convert Antigravity SSE (native Google format) to Anthropic streaming format
+			anthropicResp, err := h.convertStreamToAnthropic(bytes.NewReader(respBody), config.APITypeGemini, false)
+			if err != nil {
+				return 0, nil, nil, fmt.Errorf("failed to convert antigravity stream to anthropic: %w", err)
+			}
+			respHeaders.Set("Content-Type", "text/event-stream")
+			return status, anthropicResp, respHeaders, nil
+		}
+		// Non-stream: convert Responses JSON to Anthropic format
+		anthropicResp, err := convertResponseToAnthropic(respBody, config.APITypeResponses)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("failed to convert antigravity response to anthropic: %w", err)
+		}
+		respHeaders.Set("Content-Type", "application/json")
+		return status, anthropicResp, respHeaders, nil
+
+	case config.APITypeClaudeCode:
+		// Forward to Claude Code (native Anthropic format)
+		modifiedBody, err = json.Marshal(bodyMap)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		// ForwardToClaudeCode returns Anthropic-format data directly
+		status, respBody, respHeaders, err := ForwardToClaudeCode(h.client, upstream, modifiedBody, clientWantsStream)
+		if err != nil {
+			return status, nil, nil, err
+		}
+		return status, respBody, respHeaders, nil
+
 	case config.APITypeAnthropic:
 		// Native Anthropic - no conversion needed
 		modifiedBody, err = json.Marshal(bodyMap)

@@ -201,3 +201,69 @@ upstreams:
     available_models:
       - "gemini-pro"
       - "gemini-flash"
+
+  # Example Codex upstream (ChatGPT Code Assist with OAuth)
+  # Use api_type: "codex" for ChatGPT Codex API
+  - name: "ChatGPT Codex"
+    weight: 5
+    enabled: false
+    api_type: "codex"  # Use Codex API format (OAuth, chatgpt.com/backend-api/codex/responses)
+    # For OAuth-based upstreams, use auth_files instead of token
+    # Multiple auth files will be used in round-robin fashion
+    auth_files:
+      - "/path/to/codex-auth1.json"
+      - "/path/to/codex-auth2.json"
+    model_mappings:
+      "codex-pro": "gpt-4o"
+    available_models:
+      - "codex-pro"
+
+  # Example Gemini CLI upstream (Google Cloud Code Assist with OAuth)
+  # Use api_type: "geminicli" for Gemini CLI API
+  - name: "Gemini CLI"
+    weight: 5
+    enabled: false
+    api_type: "geminicli"  # Use Gemini CLI API format (OAuth, cloudcode-pa.googleapis.com)
+    # For OAuth-based upstreams, use auth_files instead of token
+    auth_files:
+      - "/path/to/geminicli-auth1.json"
+      - "/path/to/geminicli-auth2.json"
+    model_mappings:
+      "gemini-3-pro": "gemini-3-pro-preview"
+      "gemini-3-flash": "gemini-3-flash-preview"
+    available_models:
+      - "gemini-3-pro"
+      - "gemini-3-flash"
+
+  # Example Antigravity upstream (Google Antigravity with OAuth)
+  # Use api_type: "antigravity" for Antigravity API
+  - name: "Antigravity"
+    weight: 5
+    enabled: false
+    api_type: "antigravity"  # Use Antigravity API format (OAuth, daily-cloudcode-pa.googleapis.com)
+    auth_files:
+      - "/path/to/antigravity-auth1.json"
+      - "/path/to/antigravity-auth2.json"
+    model_mappings:
+      "gemini-3-pro": "gemini-3-pro-high"
+      "claude-opus-4-6": "claude-opus-4-6-thinking"
+    available_models:
+      - "gemini-3-pro"
+      - "claude-opus-4-6"
+
+  # Example Claude Code upstream (Anthropic Claude Code with OAuth)
+  # Use api_type: "claudecode" for Claude Code API
+  - name: "Claude Code"
+    weight: 5
+    enabled: false
+    api_type: "claudecode"  # Use Claude Code API format (OAuth, api.anthropic.com)
+    auth_files:
+      - "/path/to/claudecode-auth1.json"
+      - "/path/to/claudecode-auth2.json"
+    model_mappings:
+      "claude-opus-4-6": "claude-opus-4-6"
+      "claude-sonnet-4-6": "claude-sonnet-4-6"
+    available_models:
+      - "claude-opus-4-6"
+      - "claude-sonnet-4-6"
+

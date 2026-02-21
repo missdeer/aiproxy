@@ -551,3 +551,108 @@ func TestConvertStreamToGemini_FromResponses(t *testing.T) {
 		t.Fatalf("gemini text = %q, want %q", geminiResp.Candidates[0].Content.Parts[0].Text, "Hello world")
 	}
 }
+
+func TestExtractGeminiStreamData_ResponseWrapped(t *testing.T) {
+	// Root-level candidates (standard Gemini)
+	rootLevel := map[string]any{
+		"modelVersion": "gemini-2.5-pro",
+		"candidates": []any{
+			map[string]any{
+				"content": map[string]any{
+					"parts": []any{
+						map[string]any{"text": "root text"},
+					},
+				},
+			},
+		},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     float64(10),
+			"candidatesTokenCount": float64(20),
+		},
+	}
+	texts, model, in, out := extractGeminiStreamData(rootLevel)
+	if len(texts) != 1 || texts[0] != "root text" {
+		t.Fatalf("root-level: texts = %v, want [\"root text\"]", texts)
+	}
+	if model != "gemini-2.5-pro" {
+		t.Fatalf("root-level: model = %q, want %q", model, "gemini-2.5-pro")
+	}
+	if in != 10 || out != 20 {
+		t.Fatalf("root-level: tokens = (%d, %d), want (10, 20)", in, out)
+	}
+
+	// Response-wrapped candidates (Gemini CLI / Antigravity)
+	wrapped := map[string]any{
+		"response": map[string]any{
+			"modelVersion": "gemini-3-pro",
+			"candidates": []any{
+				map[string]any{
+					"content": map[string]any{
+						"parts": []any{
+							map[string]any{"text": "wrapped text"},
+						},
+					},
+				},
+			},
+			"usageMetadata": map[string]any{
+				"promptTokenCount":     float64(5),
+				"candidatesTokenCount": float64(15),
+			},
+		},
+	}
+	texts2, model2, in2, out2 := extractGeminiStreamData(wrapped)
+	if len(texts2) != 1 || texts2[0] != "wrapped text" {
+		t.Fatalf("wrapped: texts = %v, want [\"wrapped text\"]", texts2)
+	}
+	if model2 != "gemini-3-pro" {
+		t.Fatalf("wrapped: model = %q, want %q", model2, "gemini-3-pro")
+	}
+	if in2 != 5 || out2 != 15 {
+		t.Fatalf("wrapped: tokens = (%d, %d), want (5, 15)", in2, out2)
+	}
+}
+
+func TestConvertStreamToAnthropic_FromGeminiWrapped(t *testing.T) {
+	// Simulate response-wrapped Gemini CLI SSE events
+	sse := strings.Join([]string{
+		`data: {"response":{"modelVersion":"gemini-3-pro","candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}}`,
+		``,
+		`data: {"response":{"modelVersion":"gemini-3-pro","candidates":[{"content":{"parts":[{"text":" world"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":5}}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	h := &Handler{}
+
+	// Streaming mode
+	streamOut, err := h.convertStreamToAnthropic(strings.NewReader(sse), config.APITypeGemini, false)
+	if err != nil {
+		t.Fatalf("convertStreamToAnthropic(stream) error = %v", err)
+	}
+	streamText := string(streamOut)
+	if !strings.Contains(streamText, "content_block_delta") {
+		t.Fatalf("stream output missing content delta events: %s", streamText)
+	}
+	if !strings.Contains(streamText, "Hello") || !strings.Contains(streamText, " world") {
+		t.Fatalf("stream output missing delta text: %s", streamText)
+	}
+
+	// Non-streaming mode
+	nonStreamOut, err := h.convertStreamToAnthropic(strings.NewReader(sse), config.APITypeGemini, true)
+	if err != nil {
+		t.Fatalf("convertStreamToAnthropic(non-stream) error = %v", err)
+	}
+	var anthropicResp map[string]any
+	if err := json.Unmarshal(nonStreamOut, &anthropicResp); err != nil {
+		t.Fatalf("failed to unmarshal Anthropic response: %v", err)
+	}
+	contentAny, ok := anthropicResp["content"].([]any)
+	if !ok || len(contentAny) == 0 {
+		t.Fatalf("anthropic content missing: %#v", anthropicResp["content"])
+	}
+	first, ok := contentAny[0].(map[string]any)
+	if !ok || first["text"] != "Hello world" {
+		t.Fatalf("content text = %#v, want %q", first["text"], "Hello world")
+	}
+}
