@@ -16,15 +16,15 @@ import (
 	"github.com/missdeer/aiproxy/config"
 )
 
-type Handler struct {
+type AnthropicHandler struct {
 	cfg      *config.Config
 	balancer *balancer.WeightedRoundRobin
 	client   *http.Client
 	mu       sync.RWMutex
 }
 
-func NewHandler(cfg *config.Config) *Handler {
-	return &Handler{
+func NewAnthropicHandler(cfg *config.Config) *AnthropicHandler {
+	return &AnthropicHandler{
 		cfg:      cfg,
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
 		client:   &http.Client{},
@@ -32,7 +32,7 @@ func NewHandler(cfg *config.Config) *Handler {
 }
 
 // UpdateConfig updates the handler's configuration
-func (h *Handler) UpdateConfig(cfg *config.Config) {
+func (h *AnthropicHandler) UpdateConfig(cfg *config.Config) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.cfg = cfg
@@ -45,7 +45,7 @@ type MessageRequest struct {
 	Stream   bool   `json:"stream"`
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *AnthropicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -211,7 +211,7 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-func (h *Handler) forwardRequest(upstream config.Upstream, model string, originalBody []byte, clientWantsStream bool, originalReq *http.Request) (int, []byte, http.Header, error) {
+func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string, originalBody []byte, clientWantsStream bool, originalReq *http.Request) (int, []byte, http.Header, error) {
 	var bodyMap map[string]any
 	if err := json.Unmarshal(originalBody, &bodyMap); err != nil {
 		return 0, nil, nil, err
@@ -492,7 +492,7 @@ func (h *Handler) forwardRequest(upstream config.Upstream, model string, origina
 	return resp.StatusCode, respBody, resp.Header, nil
 }
 
-func (h *Handler) streamResponse(w http.ResponseWriter, body []byte) {
+func (h *AnthropicHandler) streamResponse(w http.ResponseWriter, body []byte) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		w.Write(body)
@@ -529,7 +529,7 @@ func stripHopByHopHeaders(h http.Header) {
 }
 
 // convertStreamToNonStream reads SSE stream events and converts them to a non-streaming response
-func (h *Handler) convertStreamToNonStream(reader io.Reader) ([]byte, error) {
+func (h *AnthropicHandler) convertStreamToNonStream(reader io.Reader) ([]byte, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 

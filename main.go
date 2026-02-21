@@ -42,14 +42,14 @@ func main() {
 	}
 
 	// Create handlers
-	handler := proxy.NewHandler(cfg)
+	anthropicHandler := proxy.NewAnthropicHandler(cfg)
 	openaiHandler := proxy.NewOpenAIHandler(cfg)
 	responsesHandler := proxy.NewResponsesHandler(cfg)
 	geminiHandler := proxy.NewGeminiCompatHandler(cfg)
 
 	// Register reload callback to update all handlers
 	cfgManager.OnReload(func(newCfg *config.Config) {
-		handler.UpdateConfig(newCfg)
+		anthropicHandler.UpdateConfig(newCfg)
 		openaiHandler.UpdateConfig(newCfg)
 		responsesHandler.UpdateConfig(newCfg)
 		geminiHandler.UpdateConfig(newCfg)
@@ -62,7 +62,7 @@ func main() {
 		defer cfgManager.StopWatching()
 	}
 
-	http.Handle("/v1/messages", handler)
+	http.Handle("/v1/messages", anthropicHandler)
 	http.Handle("/v1/chat/completions", openaiHandler)
 	http.Handle("/v1/responses", responsesHandler)
 	http.Handle("/v1beta/models/", geminiHandler)

@@ -868,7 +868,7 @@ func extractGeminiStreamData(event map[string]any) (texts []string, model string
 }
 
 // convertStreamToAnthropic converts OpenAI or Gemini streaming response to Anthropic format
-func (h *Handler) convertStreamToAnthropic(reader io.Reader, apiType config.APIType, toNonStream bool) ([]byte, error) {
+func (h *AnthropicHandler) convertStreamToAnthropic(reader io.Reader, apiType config.APIType, toNonStream bool) ([]byte, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
