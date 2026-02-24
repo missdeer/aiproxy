@@ -67,10 +67,10 @@ type GeminiCLIAuth struct {
 }
 
 // NewGeminiCLIAuth creates a new GeminiCLIAuth for the given auth file path.
-func NewGeminiCLIAuth(authFile string) *GeminiCLIAuth {
+func NewGeminiCLIAuth(authFile string, timeout time.Duration) *GeminiCLIAuth {
 	return &GeminiCLIAuth{
 		authFile: authFile,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 
@@ -186,7 +186,7 @@ var (
 	geminiCLIAuthCache   = make(map[string]*GeminiCLIAuth)
 )
 
-func getGeminiCLIAuth(authFile string) *GeminiCLIAuth {
+func getGeminiCLIAuth(authFile string, timeout time.Duration) *GeminiCLIAuth {
 	geminiCLIAuthCacheMu.RLock()
 	auth, ok := geminiCLIAuthCache[authFile]
 	geminiCLIAuthCacheMu.RUnlock()
@@ -202,7 +202,7 @@ func getGeminiCLIAuth(authFile string) *GeminiCLIAuth {
 		return auth
 	}
 
-	auth = NewGeminiCLIAuth(authFile)
+	auth = NewGeminiCLIAuth(authFile, timeout)
 	geminiCLIAuthCache[authFile] = auth
 	return auth
 }
@@ -219,10 +219,16 @@ func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBo
 		return 0, nil, nil, fmt.Errorf("geminicli upstream %s: auth_files is not configured", upstream.Name)
 	}
 
+	// Get timeout from client
+	timeout := 60 * time.Second
+	if client.Timeout > 0 {
+		timeout = client.Timeout
+	}
+
 	// Get a valid access token (auto-refreshes if needed, round-robin across auth files)
 	authFile := upstream.NextAuthFile()
 	log.Printf("[GEMINICLI] Using auth file: %s", authFile)
-	auth := getGeminiCLIAuth(authFile)
+	auth := getGeminiCLIAuth(authFile, timeout)
 	accessToken, storage, err := auth.GetAccessToken()
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("geminicli auth: %w", err)

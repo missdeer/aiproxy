@@ -69,10 +69,10 @@ type ClaudeCodeAuth struct {
 }
 
 // NewClaudeCodeAuth creates a new ClaudeCodeAuth for the given auth file path.
-func NewClaudeCodeAuth(authFile string) *ClaudeCodeAuth {
+func NewClaudeCodeAuth(authFile string, timeout time.Duration) *ClaudeCodeAuth {
 	return &ClaudeCodeAuth{
 		authFile: authFile,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 
@@ -143,7 +143,7 @@ var (
 	claudeCodeAuthCache   = make(map[string]*ClaudeCodeAuth)
 )
 
-func getClaudeCodeAuth(authFile string) *ClaudeCodeAuth {
+func getClaudeCodeAuth(authFile string, timeout time.Duration) *ClaudeCodeAuth {
 	claudeCodeAuthCacheMu.RLock()
 	auth, ok := claudeCodeAuthCache[authFile]
 	claudeCodeAuthCacheMu.RUnlock()
@@ -159,7 +159,7 @@ func getClaudeCodeAuth(authFile string) *ClaudeCodeAuth {
 		return auth
 	}
 
-	auth = NewClaudeCodeAuth(authFile)
+	auth = NewClaudeCodeAuth(authFile, timeout)
 	claudeCodeAuthCache[authFile] = auth
 	return auth
 }
@@ -176,10 +176,16 @@ func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestB
 		return 0, nil, nil, fmt.Errorf("claudecode upstream %s: auth_files is not configured", upstream.Name)
 	}
 
+	// Get timeout from client
+	timeout := 60 * time.Second
+	if client.Timeout > 0 {
+		timeout = client.Timeout
+	}
+
 	// Get a valid access token (auto-refreshes if needed, round-robin across auth files)
 	authFile := upstream.NextAuthFile()
 	log.Printf("[CLAUDECODE] Using auth file: %s", authFile)
-	auth := getClaudeCodeAuth(authFile)
+	auth := getClaudeCodeAuth(authFile, timeout)
 	accessToken, _, err := auth.GetAccessToken()
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("claudecode auth: %w", err)

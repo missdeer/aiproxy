@@ -117,11 +117,12 @@ type LogConfig struct {
 }
 
 type Config struct {
-	Bind             string     `yaml:"bind"`
-	Listen           string     `yaml:"listen"`
-	DefaultMaxTokens int        `yaml:"default_max_tokens"`
-	Upstreams        []Upstream `yaml:"upstreams"`
-	Log              LogConfig  `yaml:"log"`
+	Bind                   string     `yaml:"bind"`
+	Listen                 string     `yaml:"listen"`
+	DefaultMaxTokens       int        `yaml:"default_max_tokens"`
+	UpstreamRequestTimeout int        `yaml:"upstream_request_timeout"` // Timeout in seconds for upstream requests (default: 60)
+	Upstreams              []Upstream `yaml:"upstreams"`
+	Log                    LogConfig  `yaml:"log"`
 }
 
 func Load(path string) (*Config, error) {
@@ -145,6 +146,10 @@ func Load(path string) (*Config, error) {
 
 	if cfg.DefaultMaxTokens <= 0 {
 		cfg.DefaultMaxTokens = 4096
+	}
+
+	if cfg.UpstreamRequestTimeout <= 0 {
+		cfg.UpstreamRequestTimeout = 60 // Default 60 seconds
 	}
 
 	for i := range cfg.Upstreams {

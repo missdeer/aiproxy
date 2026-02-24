@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/missdeer/aiproxy/balancer"
 	"github.com/missdeer/aiproxy/config"
@@ -24,10 +25,11 @@ type AnthropicHandler struct {
 }
 
 func NewAnthropicHandler(cfg *config.Config) *AnthropicHandler {
+	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	return &AnthropicHandler{
 		cfg:      cfg,
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
-		client:   &http.Client{},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 

@@ -73,10 +73,10 @@ type CodexAuth struct {
 }
 
 // NewCodexAuth creates a new CodexAuth for the given auth file path.
-func NewCodexAuth(authFile string) *CodexAuth {
+func NewCodexAuth(authFile string, timeout time.Duration) *CodexAuth {
 	return &CodexAuth{
 		authFile: authFile,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 
@@ -155,7 +155,7 @@ var (
 	codexAuthCache   = make(map[string]*CodexAuth)
 )
 
-func getCodexAuth(authFile string) *CodexAuth {
+func getCodexAuth(authFile string, timeout time.Duration) *CodexAuth {
 	codexAuthCacheMu.RLock()
 	auth, ok := codexAuthCache[authFile]
 	codexAuthCacheMu.RUnlock()
@@ -171,7 +171,7 @@ func getCodexAuth(authFile string) *CodexAuth {
 		return auth
 	}
 
-	auth = NewCodexAuth(authFile)
+	auth = NewCodexAuth(authFile, timeout)
 	codexAuthCache[authFile] = auth
 	return auth
 }
@@ -188,10 +188,16 @@ func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody [
 		return 0, nil, nil, fmt.Errorf("codex upstream %s: auth_files is not configured", upstream.Name)
 	}
 
+	// Get timeout from client
+	timeout := 60 * time.Second
+	if client.Timeout > 0 {
+		timeout = client.Timeout
+	}
+
 	// Get a valid access token (auto-refreshes if needed, round-robin across auth files)
 	authFile := upstream.NextAuthFile()
 	log.Printf("[CODEX] Using auth file: %s", authFile)
-	auth := getCodexAuth(authFile)
+	auth := getCodexAuth(authFile, timeout)
 	accessToken, storage, err := auth.GetAccessToken()
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("codex auth: %w", err)

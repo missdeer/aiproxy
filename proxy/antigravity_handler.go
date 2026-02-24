@@ -34,7 +34,7 @@ const (
 	antigravityClientSecret      = "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"
 	antigravityBase              = "https://daily-cloudcode-pa.googleapis.com"
 	antigravityStreamPath        = "/v1internal:streamGenerateContent"
-	antigravityAgent             = "antigravity/1.18.3 Darwin/arm64"
+	antigravityAgent             = "antigravity/1.18.4 Darwin/arm64"
 	antigravitySystemInstruction = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"
 )
 
@@ -72,10 +72,10 @@ type AntigravityAuth struct {
 }
 
 // NewAntigravityAuth creates a new AntigravityAuth for the given auth file path.
-func NewAntigravityAuth(authFile string) *AntigravityAuth {
+func NewAntigravityAuth(authFile string, timeout time.Duration) *AntigravityAuth {
 	return &AntigravityAuth{
 		authFile: authFile,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 
@@ -156,7 +156,7 @@ var (
 	antigravityAuthCache   = make(map[string]*AntigravityAuth)
 )
 
-func getAntigravityAuth(authFile string) *AntigravityAuth {
+func getAntigravityAuth(authFile string, timeout time.Duration) *AntigravityAuth {
 	antigravityAuthCacheMu.RLock()
 	auth, ok := antigravityAuthCache[authFile]
 	antigravityAuthCacheMu.RUnlock()
@@ -172,7 +172,7 @@ func getAntigravityAuth(authFile string) *AntigravityAuth {
 		return auth
 	}
 
-	auth = NewAntigravityAuth(authFile)
+	auth = NewAntigravityAuth(authFile, timeout)
 	antigravityAuthCache[authFile] = auth
 	return auth
 }
@@ -189,10 +189,16 @@ func ForwardToAntigravity(client *http.Client, upstream config.Upstream, request
 		return 0, nil, nil, fmt.Errorf("antigravity upstream %s: auth_files is not configured", upstream.Name)
 	}
 
+	// Get timeout from client
+	timeout := 60 * time.Second
+	if client.Timeout > 0 {
+		timeout = client.Timeout
+	}
+
 	// Get a valid access token (auto-refreshes if needed, round-robin across auth files)
 	authFile := upstream.NextAuthFile()
 	log.Printf("[ANTIGRAVITY] Using auth file: %s", authFile)
-	auth := getAntigravityAuth(authFile)
+	auth := getAntigravityAuth(authFile, timeout)
 	accessToken, storage, err := auth.GetAccessToken()
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("antigravity auth: %w", err)

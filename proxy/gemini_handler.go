@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/missdeer/aiproxy/balancer"
 	"github.com/missdeer/aiproxy/config"
@@ -25,10 +26,11 @@ type GeminiHandler struct {
 
 // NewGeminiHandler creates a new Gemini API handler
 func NewGeminiHandler(cfg *config.Config) *GeminiHandler {
+	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	return &GeminiHandler{
 		cfg:      cfg,
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
-		client:   &http.Client{},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 

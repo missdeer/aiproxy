@@ -26,10 +26,11 @@ type OpenAIHandler struct {
 
 // NewOpenAIHandler creates a new OpenAI-compatible handler
 func NewOpenAIHandler(cfg *config.Config) *OpenAIHandler {
+	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	return &OpenAIHandler{
 		cfg:      cfg,
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
-		client:   &http.Client{},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 

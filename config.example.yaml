@@ -10,6 +10,10 @@ listen: ":8642"
 # This is used when converting requests to APIs that require max_tokens (e.g., Anthropic)
 default_max_tokens: 4096
 
+# Timeout in seconds for upstream requests (default: 60)
+# This prevents requests from hanging indefinitely when upstream services are slow or unresponsive
+upstream_request_timeout: 60
+
 # Rotating file log configuration (optional)
 # If not specified or file is empty, logs go to stdout
 log:

@@ -42,7 +42,7 @@ func TestGeminiCLIAuth_ProjectIDRetryAfterFailure(t *testing.T) {
 		t.Fatalf("write auth file: %v", err)
 	}
 
-	ga := NewGeminiCLIAuth(authFile)
+	ga := NewGeminiCLIAuth(authFile, 30*time.Second)
 	// Override the HTTP client with a mock transport
 	ga.client = &http.Client{
 		Transport: &mockRoundTripper{

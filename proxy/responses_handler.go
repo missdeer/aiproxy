@@ -26,10 +26,11 @@ type ResponsesHandler struct {
 
 // NewResponsesHandler creates a new Responses API handler
 func NewResponsesHandler(cfg *config.Config) *ResponsesHandler {
+	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	return &ResponsesHandler{
 		cfg:      cfg,
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
-		client:   &http.Client{},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/missdeer/aiproxy/balancer"
 	"github.com/missdeer/aiproxy/config"
@@ -19,10 +20,11 @@ type BaseHandler struct {
 
 // NewBaseHandler creates a new BaseHandler with shared components
 func NewBaseHandler(cfg *config.Config) BaseHandler {
+	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	return BaseHandler{
 		Cfg:      cfg,
 		Balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
-		Client:   &http.Client{},
+		Client:   &http.Client{Timeout: timeout},
 	}
 }
 
