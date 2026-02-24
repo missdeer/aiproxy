@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/missdeer/aiproxy/config"
+	"github.com/missdeer/aiproxy/upstreammeta"
 	"github.com/tidwall/gjson"
 )
 
@@ -34,7 +35,6 @@ const (
 	antigravityClientSecret      = "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"
 	antigravityBase              = "https://daily-cloudcode-pa.googleapis.com"
 	antigravityStreamPath        = "/v1internal:streamGenerateContent"
-	antigravityAgent             = "antigravity/1.18.4 Darwin/arm64"
 	antigravitySystemInstruction = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"
 )
 
@@ -290,7 +290,7 @@ func ForwardToAntigravity(client *http.Client, upstream config.Upstream, request
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", antigravityAgent)
+	req.Header.Set("User-Agent", upstreammeta.UserAgentAntigravity)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -445,7 +445,7 @@ func antigravityFetchProjectID(client *http.Client, accessToken string) (string,
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("User-Agent", antigravityAgent)
+	req.Header.Set("User-Agent", upstreammeta.UserAgentAntigravity)
 
 	resp, err := client.Do(req)
 	if err != nil {

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/missdeer/aiproxy/config"
+	"github.com/missdeer/aiproxy/upstreammeta"
 	"github.com/tidwall/gjson"
 )
 
@@ -33,7 +34,6 @@ const (
 	geminiCLIClientSecret = "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"
 	geminiCLIBase         = "https://cloudcode-pa.googleapis.com"
 	geminiCLIPath         = "/v1internal:streamGenerateContent"
-	geminiCLIUserAgent    = "google-api-nodejs-client/9.15.1"
 	geminiCLIAPIClient    = "gl-node/22.17.0"
 )
 
@@ -314,7 +314,7 @@ func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBo
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", geminiCLIUserAgent)
+	req.Header.Set("User-Agent", upstreammeta.UserAgentGeminiCLI)
 	req.Header.Set("X-Goog-Api-Client", geminiCLIAPIClient)
 	req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
 
@@ -468,7 +468,7 @@ func geminiCLIFetchProjectID(client *http.Client, accessToken string) (string, e
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("User-Agent", geminiCLIUserAgent)
+	req.Header.Set("User-Agent", upstreammeta.UserAgentGeminiCLI)
 	req.Header.Set("X-Goog-Api-Client", geminiCLIAPIClient)
 	req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
 

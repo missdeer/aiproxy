@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/missdeer/aiproxy/config"
+	"github.com/missdeer/aiproxy/upstreammeta"
 )
 
 // ── OAuth / API constants ──────────────────────────────────────────────
@@ -31,7 +32,6 @@ const (
 	claudeCodeClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 	claudeCodeBaseURL  = "https://api.anthropic.com"
 	claudeCodeVersion  = "2023-06-01"
-	claudeCodeAgent    = "claude-cli/2.1.50 (external, sdk-cli)"
 )
 
 // ── Data structures ────────────────────────────────────────────────────
@@ -217,7 +217,7 @@ func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestB
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Anthropic-Version", claudeCodeVersion)
 	req.Header.Set("Anthropic-Beta", "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14,prompt-caching-2024-07-31")
-	req.Header.Set("User-Agent", claudeCodeAgent)
+	req.Header.Set("User-Agent", upstreammeta.UserAgentClaudeCodeCLI)
 	req.Header.Set("X-Stainless-Lang", "go")
 	req.Header.Set("X-Stainless-Package-Version", "2.1.44")
 	req.Header.Set("X-Stainless-Runtime", "go")

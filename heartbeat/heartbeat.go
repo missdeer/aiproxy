@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/missdeer/aiproxy/config"
+	"github.com/missdeer/aiproxy/upstreammeta"
 )
 
 // Manager manages heartbeat goroutines for all upstreams
@@ -199,6 +200,10 @@ func (m *Manager) sendHeartbeat(upstream config.Upstream) {
 	if err != nil {
 		log.Printf("[HEARTBEAT] Failed to create heartbeat request for %s: %v", upstream.Name, err)
 		return
+	}
+
+	if ua := upstreammeta.HeartbeatUserAgentForAPIType(apiType); ua != "" {
+		req.Header.Set("User-Agent", ua)
 	}
 
 	// Set authentication headers
