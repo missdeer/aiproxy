@@ -143,9 +143,9 @@ func TestWeightedRoundRobin_NextForModelWithUnavailable(t *testing.T) {
 
 	wrr := NewWeightedRoundRobin(upstreams)
 
-	// Mark 'a' as unavailable by recording failures
+	// Mark 'a' as unavailable for model-x by recording failures
 	for i := 0; i < 3; i++ {
-		wrr.RecordFailure("a")
+		wrr.RecordFailure("a", "model-x")
 	}
 
 	// Should only return b and c now
@@ -304,6 +304,104 @@ func TestWeightedRoundRobin_UpdateZeroWeightNoPanic(t *testing.T) {
 		if next == nil {
 			t.Fatalf("Next returned nil at iteration %d", i)
 		}
+	}
+}
+
+func TestWeightedRoundRobin_UpdatePreservesPerModelState(t *testing.T) {
+	upstreams := []config.Upstream{
+		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1", "m2"}},
+		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1", "m2"}},
+	}
+
+	wrr := NewWeightedRoundRobin(upstreams)
+
+	// Mark 'a' model 'm1' as unavailable
+	for i := 0; i < 3; i++ {
+		wrr.RecordFailure("a", "m1")
+	}
+
+	// Verify 'a' is unavailable for m1 but available for m2
+	if wrr.IsAvailable("a", "m1") {
+		t.Error("Expected 'a' model 'm1' to be unavailable")
+	}
+	if !wrr.IsAvailable("a", "m2") {
+		t.Error("Expected 'a' model 'm2' to still be available")
+	}
+
+	// Update with same upstreams — state should be preserved
+	wrr.Update(upstreams)
+
+	if wrr.IsAvailable("a", "m1") {
+		t.Error("Expected 'a' model 'm1' to remain unavailable after Update")
+	}
+	if !wrr.IsAvailable("a", "m2") {
+		t.Error("Expected 'a' model 'm2' to remain available after Update")
+	}
+	if !wrr.IsAvailable("b", "m1") {
+		t.Error("Expected 'b' model 'm1' to remain available after Update")
+	}
+}
+
+func TestWeightedRoundRobin_UpdateRemovesStateForRemovedUpstream(t *testing.T) {
+	upstreams := []config.Upstream{
+		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
+		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
+	}
+
+	wrr := NewWeightedRoundRobin(upstreams)
+
+	// Mark both upstreams as unavailable for m1
+	for i := 0; i < 3; i++ {
+		wrr.RecordFailure("a", "m1")
+		wrr.RecordFailure("b", "m1")
+	}
+
+	// Update removing 'a', keeping 'b'
+	wrr.Update([]config.Upstream{
+		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
+	})
+
+	// 'b' state should be preserved (still unavailable)
+	if wrr.IsAvailable("b", "m1") {
+		t.Error("Expected 'b' model 'm1' to remain unavailable after Update")
+	}
+
+	// Re-add 'a' — should start fresh (available)
+	wrr.Update([]config.Upstream{
+		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
+		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
+	})
+
+	if !wrr.IsAvailable("a", "m1") {
+		t.Error("Expected re-added 'a' model 'm1' to be available")
+	}
+	if wrr.IsAvailable("b", "m1") {
+		t.Error("Expected 'b' model 'm1' to remain unavailable")
+	}
+}
+
+func TestWeightedRoundRobin_UpdateClearsStateWhenAllDisabled(t *testing.T) {
+	upstreams := []config.Upstream{
+		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
+	}
+
+	wrr := NewWeightedRoundRobin(upstreams)
+
+	// Mark 'a' as unavailable for m1
+	for i := 0; i < 3; i++ {
+		wrr.RecordFailure("a", "m1")
+	}
+
+	// Update with all disabled — should clear states
+	wrr.Update([]config.Upstream{
+		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(false), AvailableModels: []string{"m1"}},
+	})
+
+	// Re-enable 'a' — should start fresh
+	wrr.Update(upstreams)
+
+	if !wrr.IsAvailable("a", "m1") {
+		t.Error("Expected 'a' model 'm1' to be available after re-enable")
 	}
 }
 

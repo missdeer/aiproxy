@@ -21,7 +21,7 @@ type upstreamState struct {
 type WeightedRoundRobin struct {
 	upstreams []config.Upstream
 	weights   []int
-	states    map[string]*upstreamState
+	states    map[string]map[string]*upstreamState // upstream name -> model -> state
 	current   int
 	cw        int // current weight for weighted round-robin
 	gcd       int
@@ -32,7 +32,7 @@ type WeightedRoundRobin struct {
 func NewWeightedRoundRobin(upstreams []config.Upstream) *WeightedRoundRobin {
 	if len(upstreams) == 0 {
 		return &WeightedRoundRobin{
-			states: make(map[string]*upstreamState),
+			states: make(map[string]map[string]*upstreamState),
 		}
 	}
 
@@ -46,7 +46,7 @@ func NewWeightedRoundRobin(upstreams []config.Upstream) *WeightedRoundRobin {
 
 	if len(enabledUpstreams) == 0 {
 		return &WeightedRoundRobin{
-			states: make(map[string]*upstreamState),
+			states: make(map[string]map[string]*upstreamState),
 		}
 	}
 
@@ -68,15 +68,10 @@ func NewWeightedRoundRobin(upstreams []config.Upstream) *WeightedRoundRobin {
 		gcd = gcdFunc(gcd, w)
 	}
 
-	states := make(map[string]*upstreamState)
-	for _, u := range enabledUpstreams {
-		states[u.Name] = &upstreamState{}
-	}
-
 	return &WeightedRoundRobin{
 		upstreams: enabledUpstreams,
 		weights:   weights,
-		states:    states,
+		states:    make(map[string]map[string]*upstreamState),
 		current:   -1,
 		gcd:       gcd,
 		maxWeight: maxWeight,
@@ -90,17 +85,22 @@ func gcdFunc(a, b int) int {
 	return a
 }
 
-// IsAvailable checks if an upstream is available (not in cooldown)
-func (w *WeightedRoundRobin) IsAvailable(name string) bool {
+// IsAvailable checks if an upstream's model is available (not in cooldown)
+func (w *WeightedRoundRobin) IsAvailable(name, model string) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	return w.isAvailableLocked(name)
+	return w.isAvailableLocked(name, model)
 }
 
 // isAvailableLocked checks availability without locking (must be called with lock held)
-func (w *WeightedRoundRobin) isAvailableLocked(name string) bool {
-	state, ok := w.states[name]
+func (w *WeightedRoundRobin) isAvailableLocked(name, model string) bool {
+	modelStates, ok := w.states[name]
+	if !ok {
+		return true
+	}
+
+	state, ok := modelStates[model]
 	if !ok {
 		return true
 	}
@@ -119,25 +119,34 @@ func (w *WeightedRoundRobin) isAvailableLocked(name string) bool {
 	return false
 }
 
-// RecordSuccess resets failure count for an upstream
-func (w *WeightedRoundRobin) RecordSuccess(name string) {
+// RecordSuccess resets failure count for an upstream+model pair
+func (w *WeightedRoundRobin) RecordSuccess(name, model string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if state, ok := w.states[name]; ok {
-		state.failures = 0
+	if modelStates, ok := w.states[name]; ok {
+		if state, ok := modelStates[model]; ok {
+			state.failures = 0
+		}
 	}
 }
 
-// RecordFailure records a failure for an upstream
-// Returns true if the upstream is now marked as unavailable
-func (w *WeightedRoundRobin) RecordFailure(name string) bool {
+// RecordFailure records a failure for an upstream+model pair.
+// Returns true if the upstream+model is now marked as unavailable.
+func (w *WeightedRoundRobin) RecordFailure(name, model string) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	state, ok := w.states[name]
+	modelStates, ok := w.states[name]
 	if !ok {
-		return false
+		modelStates = make(map[string]*upstreamState)
+		w.states[name] = modelStates
+	}
+
+	state, ok := modelStates[model]
+	if !ok {
+		state = &upstreamState{}
+		modelStates[model] = state
 	}
 
 	state.failures++
@@ -245,7 +254,7 @@ func (w *WeightedRoundRobin) NextForModel(model string) *config.Upstream {
 
 	for i := 0; i < maxIterations; i++ {
 		next := w.nextLocked()
-		if next != nil && next.SupportsModel(model) && w.isAvailableLocked(next.Name) {
+		if next != nil && next.SupportsModel(model) && w.isAvailableLocked(next.Name, model) {
 			return next
 		}
 	}
@@ -293,6 +302,7 @@ func (w *WeightedRoundRobin) Update(upstreams []config.Upstream) {
 	if len(enabledUpstreams) == 0 {
 		w.upstreams = nil
 		w.weights = nil
+		w.states = make(map[string]map[string]*upstreamState)
 		w.current = -1
 		w.gcd = 0
 		w.maxWeight = 0
@@ -300,12 +310,14 @@ func (w *WeightedRoundRobin) Update(upstreams []config.Upstream) {
 	}
 
 	// Preserve existing state for upstreams that still exist
-	newStates := make(map[string]*upstreamState)
+	enabledNames := make(map[string]bool)
 	for _, u := range enabledUpstreams {
-		if oldState, ok := w.states[u.Name]; ok {
-			newStates[u.Name] = oldState
-		} else {
-			newStates[u.Name] = &upstreamState{}
+		enabledNames[u.Name] = true
+	}
+	newStates := make(map[string]map[string]*upstreamState)
+	for name, modelStates := range w.states {
+		if enabledNames[name] {
+			newStates[name] = modelStates
 		}
 	}
 

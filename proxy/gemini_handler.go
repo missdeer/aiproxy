@@ -147,7 +147,7 @@ func (h *GeminiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Filter upstreams that support the requested model and are available
 	var supportedUpstreams []config.Upstream
 	for _, u := range upstreams {
-		if u.SupportsModel(originalModel) && h.balancer.IsAvailable(u.Name) {
+		if u.SupportsModel(originalModel) && h.balancer.IsAvailable(u.Name, originalModel) {
 			supportedUpstreams = append(supportedUpstreams, u)
 		}
 	}
@@ -188,8 +188,8 @@ func (h *GeminiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		status, respBody, respHeaders, err := h.forwardRequest(upstream, mappedModel, body, isStream, r)
 		if err != nil {
 			log.Printf("[ERROR] Upstream %s connection error: %v", upstream.Name, err)
-			if h.balancer.RecordFailure(upstream.Name) {
-				log.Printf("[CIRCUIT] Upstream %s marked as unavailable after %d consecutive failures", upstream.Name, 3)
+			if h.balancer.RecordFailure(upstream.Name, originalModel) {
+				log.Printf("[CIRCUIT] Upstream %s model %s marked as unavailable after %d consecutive failures", upstream.Name, originalModel, 3)
 			}
 			lastErr = err
 			lastStatus = http.StatusBadGateway
@@ -198,8 +198,8 @@ func (h *GeminiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if status >= 400 {
 			log.Printf("[ERROR] Upstream %s returned HTTP %d, response: %s", upstream.Name, status, truncateString(string(respBody), 200))
-			if h.balancer.RecordFailure(upstream.Name) {
-				log.Printf("[CIRCUIT] Upstream %s marked as unavailable after %d consecutive failures", upstream.Name, 3)
+			if h.balancer.RecordFailure(upstream.Name, originalModel) {
+				log.Printf("[CIRCUIT] Upstream %s model %s marked as unavailable after %d consecutive failures", upstream.Name, originalModel, 3)
 			}
 			lastErr = fmt.Errorf("upstream returned status %d", status)
 			lastStatus = status
@@ -207,7 +207,7 @@ func (h *GeminiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Success
-		h.balancer.RecordSuccess(upstream.Name)
+		h.balancer.RecordSuccess(upstream.Name, originalModel)
 		log.Printf("[SUCCESS] Upstream %s returned HTTP %d", upstream.Name, status)
 
 		for k, vv := range respHeaders {

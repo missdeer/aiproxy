@@ -51,7 +51,7 @@ func (b *BaseHandler) FilterAndOrderUpstreams(model string) ([]config.Upstream, 
 	// Filter upstreams that support the requested model and are available
 	var supportedUpstreams []config.Upstream
 	for _, u := range upstreams {
-		if u.SupportsModel(model) && b.Balancer.IsAvailable(u.Name) {
+		if u.SupportsModel(model) && b.Balancer.IsAvailable(u.Name, model) {
 			supportedUpstreams = append(supportedUpstreams, u)
 		}
 	}
