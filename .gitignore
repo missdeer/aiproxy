@@ -38,3 +38,16 @@ aiproxy
 
 # Log files
 *.log
+
+# Claude Code local settings
+.claude/
+
+# Go build cache
+.gocache/
+
+# OAuth authentication files
+*-auth*.json
+codex-*.json
+geminicli-*.json
+antigravity-*.json
+claudecode-*.json
