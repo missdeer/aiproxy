@@ -9,6 +9,7 @@
 package oauthcache
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -19,6 +20,18 @@ import (
 
 	"golang.org/x/sync/singleflight"
 )
+
+// ErrAuthDisabled indicates that an auth file has been permanently disabled
+// (e.g. due to HTTP 401/403 from the OAuth token endpoint).
+// Use errors.As to check for this error type.
+type ErrAuthDisabled struct {
+	AuthFile string
+	Reason   string
+}
+
+func (e *ErrAuthDisabled) Error() string {
+	return fmt.Sprintf("auth file disabled: %s: %s", e.AuthFile, e.Reason)
+}
 
 // Config defines handler-specific callbacks for a particular storage type S.
 type Config[S any] struct {
@@ -42,7 +55,13 @@ type Config[S any] struct {
 	// Refresh performs the HTTP token refresh, updating *s in-place.
 	// It returns the token expiry duration and any error.
 	// The caller already holds the write lock, so this runs exclusively.
+	// Return *ErrAuthDisabled to permanently disable this auth file.
 	Refresh func(client *http.Client, s *S, authFile string) (expiresIn time.Duration, err error)
+
+	// Disable marks a storage value as disabled and saves to disk.
+	// Called synchronously when Refresh returns *ErrAuthDisabled.
+	// If nil, only in-memory eviction occurs (no disk persistence).
+	Disable func(path string, s *S) error
 }
 
 // entry manages the token lifecycle for a single auth file.
@@ -59,8 +78,9 @@ type entry[S any] struct {
 
 // Manager manages OAuth token caching for a specific handler type.
 type Manager[S any] struct {
-	cfg   Config[S]
-	cache sync.Map // map[string]*entry[S]
+	cfg      Config[S]
+	cache    sync.Map // map[string]*entry[S]
+	disabled sync.Map // set of disabled auth file paths (map[string]string: path -> reason)
 }
 
 // NewManager creates a new Manager with the given configuration.
@@ -89,7 +109,13 @@ type result[S any] struct {
 
 // GetToken returns a valid access token for the given auth file,
 // refreshing if necessary. Safe for concurrent use.
+// Returns *ErrAuthDisabled if the file has been permanently disabled.
 func (m *Manager[S]) GetToken(authFile string, timeout time.Duration) (string, *S, error) {
+	// Early exit: check disabled set before any work
+	if reason, ok := m.disabled.Load(authFile); ok {
+		return "", nil, &ErrAuthDisabled{AuthFile: authFile, Reason: reason.(string)}
+	}
+
 	e := m.getEntry(authFile, timeout)
 
 	// Fast path: read lock check
@@ -122,6 +148,14 @@ func (m *Manager[S]) GetToken(authFile string, timeout time.Duration) (string, *
 			var err error
 			storage, err = m.cfg.Load(authFile)
 			if err != nil {
+				// If Load reports disabled, record in disabled set
+				var disabledErr *ErrAuthDisabled
+				if errors.As(err, &disabledErr) {
+					m.disabled.Store(authFile, disabledErr.Reason)
+					m.cache.Delete(authFile)
+					log.Printf("%s Auth file disabled (on load): %s: %s", m.cfg.Label, authFile, disabledErr.Reason)
+					return nil, disabledErr
+				}
 				return nil, fmt.Errorf("load auth file %s: %w", authFile, err)
 			}
 		}
@@ -133,6 +167,25 @@ func (m *Manager[S]) GetToken(authFile string, timeout time.Duration) (string, *
 		log.Printf("%s Refreshing token (file: %s)", m.cfg.Label, authFile)
 		expiresIn, err := m.cfg.Refresh(e.client, storage, authFile)
 		if err != nil {
+			// If Refresh reports disabled, persist and evict
+			var disabledErr *ErrAuthDisabled
+			if errors.As(err, &disabledErr) {
+				// Suppress pending async saves
+				e.saveVer.Add(1)
+				// Persist disabled state to disk, serialized with async saves
+				if m.cfg.Disable != nil {
+					e.saveMu.Lock()
+					dErr := m.cfg.Disable(authFile, storage)
+					e.saveMu.Unlock()
+					if dErr != nil {
+						log.Printf("%s Warning: failed to persist disabled state for %s: %v", m.cfg.Label, authFile, dErr)
+					}
+				}
+				m.disabled.Store(authFile, disabledErr.Reason)
+				m.cache.Delete(authFile)
+				log.Printf("%s Auth file disabled (on refresh): %s: %s", m.cfg.Label, authFile, disabledErr.Reason)
+				return nil, disabledErr
+			}
 			return nil, fmt.Errorf("token refresh for %s: %w", authFile, err)
 		}
 
@@ -194,7 +247,41 @@ func (m *Manager[S]) StoreEntry(authFile string, storage *S, expiresAt time.Time
 	m.cache.Store(authFile, e)
 }
 
-// DeleteEntry removes a cached entry (useful for testing).
+// DeleteEntry removes a cached entry and clears any disabled state (useful for testing).
 func (m *Manager[S]) DeleteEntry(authFile string) {
 	m.cache.Delete(authFile)
+	m.disabled.Delete(authFile)
+}
+
+// GetTokenWithRetry iterates all auth files starting at the given offset,
+// skipping disabled files, and returns the first successful token.
+// This eliminates the need for each ForwardTo* function to implement its own retry loop.
+//
+// Parameters:
+//   - authFiles: snapshot of auth file paths (e.g. upstream.AuthFiles)
+//   - startIndex: starting offset for round-robin (e.g. upstream.AuthFileStartIndex())
+//   - timeout: HTTP client timeout for token refresh
+//   - label: log prefix, e.g. "[CODEX]"
+func (m *Manager[S]) GetTokenWithRetry(authFiles []string, startIndex int, timeout time.Duration, label string) (string, *S, error) {
+	if len(authFiles) == 0 {
+		return "", nil, fmt.Errorf("%s no auth files configured", label)
+	}
+
+	var lastErr error
+	for i := 0; i < len(authFiles); i++ {
+		authFile := authFiles[(startIndex+i)%len(authFiles)]
+		log.Printf("%s Trying auth file: %s", label, authFile)
+		token, storage, err := m.GetToken(authFile, timeout)
+		if err != nil {
+			var disabledErr *ErrAuthDisabled
+			if errors.As(err, &disabledErr) {
+				log.Printf("%s Skipping disabled auth file: %s: %s", label, authFile, disabledErr.Reason)
+				lastErr = err
+				continue
+			}
+			return "", nil, err
+		}
+		return token, storage, nil
+	}
+	return "", nil, fmt.Errorf("%s all auth files disabled: %w", label, lastErr)
 }

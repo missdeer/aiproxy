@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/missdeer/aiproxy/config"
+	"github.com/missdeer/aiproxy/oauthcache"
 )
 
 // ── codexBase64URLDecode tests ─────────────────────────────────────────
@@ -203,12 +205,14 @@ func TestCodexSaveStorage_DisabledField(t *testing.T) {
 		t.Fatalf("codexSaveStorage() error = %v", err)
 	}
 
-	loaded, err := codexLoadStorage(authFile)
-	if err != nil {
-		t.Fatalf("codexLoadStorage() error = %v", err)
+	// codexLoadStorage should now return ErrAuthDisabled for a disabled file
+	_, err := codexLoadStorage(authFile)
+	if err == nil {
+		t.Fatal("expected error when loading disabled file")
 	}
-	if !loaded.Disabled {
-		t.Fatal("expected Disabled=true after round-trip")
+	var disabledErr *oauthcache.ErrAuthDisabled
+	if !errors.As(err, &disabledErr) {
+		t.Fatalf("expected ErrAuthDisabled, got %T: %v", err, err)
 	}
 }
 

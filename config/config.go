@@ -88,6 +88,16 @@ func nextAuthFileIndex(name string, n int) int {
 	return int(idx % uint64(n))
 }
 
+// AuthFileStartIndex returns the next round-robin index for this upstream's auth files.
+// Use this as the starting offset when iterating a local snapshot of AuthFiles,
+// to spread load without repeatedly calling the global counter.
+func (u *Upstream) AuthFileStartIndex() int {
+	if len(u.AuthFiles) == 0 {
+		return 0
+	}
+	return nextAuthFileIndex(u.Name, len(u.AuthFiles))
+}
+
 func (u *Upstream) SupportsModel(model string) bool {
 	if len(u.AvailableModels) == 0 {
 		return true // 未配置则支持所有模型

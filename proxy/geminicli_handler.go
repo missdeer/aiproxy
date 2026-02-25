@@ -42,6 +42,7 @@ const (
 // GeminiCLITokenStorage mirrors the on-disk JSON format for Gemini CLI auth.
 type GeminiCLITokenStorage struct {
 	Token     map[string]any `json:"token"`
+	Disabled  bool           `json:"disabled,omitempty"`
 	ProjectID string         `json:"project_id"`
 	Email     string         `json:"email"`
 	Type      string         `json:"type"`
@@ -70,6 +71,10 @@ var geminiCLIAuthManager = oauthcache.NewManager(oauthcache.Config[GeminiCLIToke
 		return c
 	},
 	Refresh: geminiCLIRefreshAndUpdate,
+	Disable: func(path string, s *GeminiCLITokenStorage) error {
+		s.Disabled = true
+		return geminiCLISaveStorage(path, s)
+	},
 })
 
 // geminiCLIRefreshAndUpdate handles the full GeminiCLI refresh flow:
@@ -110,8 +115,11 @@ func geminiCLIRefreshAndUpdate(client *http.Client, storage *GeminiCLITokenStora
 	}
 
 	log.Printf("[GEMINICLI] Refreshing token for %s (file: %s)", storage.Email, authFile)
-	tok, err := geminiCLIRefreshAccessToken(client, refreshToken)
+	tok, statusCode, err := geminiCLIRefreshAccessToken(client, refreshToken)
 	if err != nil {
+		if statusCode == 401 || statusCode == 403 {
+			return 0, &oauthcache.ErrAuthDisabled{AuthFile: authFile, Reason: err.Error()}
+		}
 		return 0, err
 	}
 
@@ -150,26 +158,21 @@ func geminiCLIRefreshAndUpdate(client *http.Client, storage *GeminiCLITokenStora
 // The Gemini CLI API always uses SSE streaming; when clientWantsStream is false,
 // the SSE output is reassembled into a single Responses-format JSON response.
 func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
-	if len(upstream.AuthFiles) == 0 {
-		return 0, nil, nil, fmt.Errorf("geminicli upstream %s: auth_files is not configured", upstream.Name)
-	}
-
 	// Get timeout from client
 	timeout := 60 * time.Second
 	if client.Timeout > 0 {
 		timeout = client.Timeout
 	}
 
-	// Get a valid access token (auto-refreshes if needed, round-robin across auth files)
-	authFile := upstream.NextAuthFile()
-	log.Printf("[GEMINICLI] Using auth file: %s", authFile)
-	accessToken, storage, err := geminiCLIAuthManager.GetToken(authFile, timeout)
+	// Get a valid access token (auto-refreshes if needed, skips disabled files)
+	accessToken, storage, err := geminiCLIAuthManager.GetTokenWithRetry(
+		upstream.AuthFiles, upstream.AuthFileStartIndex(), timeout, "[GEMINICLI]")
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("geminicli auth: %w", err)
 	}
 
 	if storage.ProjectID == "" {
-		return 0, nil, nil, fmt.Errorf("project_id is empty for %s", authFile)
+		return 0, nil, nil, fmt.Errorf("project_id is empty for upstream %s", upstream.Name)
 	}
 
 	// Parse request body to extract model and input
@@ -348,7 +351,7 @@ func geminiCLISSEToResponsesJSON(sseData []byte) ([]byte, error) {
 
 // ── Token refresh ──────────────────────────────────────────────────────
 
-func geminiCLIRefreshAccessToken(client *http.Client, refreshTok string) (*GeminiCLITokenResponse, error) {
+func geminiCLIRefreshAccessToken(client *http.Client, refreshTok string) (*GeminiCLITokenResponse, int, error) {
 	form := url.Values{
 		"client_id":     {geminiCLIClientID},
 		"client_secret": {geminiCLIClientSecret},
@@ -358,27 +361,27 @@ func geminiCLIRefreshAccessToken(client *http.Client, refreshTok string) (*Gemin
 
 	req, err := http.NewRequest("POST", geminiCLITokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
+		return nil, resp.StatusCode, fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
 	}
 
 	var tok GeminiCLITokenResponse
 	if err := json.Unmarshal(body, &tok); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
+		return nil, resp.StatusCode, fmt.Errorf("parse response: %w", err)
 	}
-	return &tok, nil
+	return &tok, resp.StatusCode, nil
 }
 
 // ── Project ID discovery ───────────────────────────────────────────────
@@ -444,6 +447,9 @@ func geminiCLILoadStorage(path string) (*GeminiCLITokenStorage, error) {
 	var s GeminiCLITokenStorage
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
+	}
+	if s.Disabled {
+		return nil, &oauthcache.ErrAuthDisabled{AuthFile: path, Reason: "marked disabled on disk"}
 	}
 	return &s, nil
 }

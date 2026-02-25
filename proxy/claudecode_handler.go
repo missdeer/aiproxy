@@ -39,6 +39,7 @@ const (
 // ClaudeCodeTokenStorage mirrors the on-disk JSON format for Claude Code auth.
 type ClaudeCodeTokenStorage struct {
 	AccessToken  string `json:"access_token"`
+	Disabled     bool   `json:"disabled,omitempty"`
 	RefreshToken string `json:"refresh_token"`
 	Email        string `json:"email"`
 	Expire       string `json:"expired"`
@@ -60,12 +61,16 @@ type ClaudeCodeTokenResponse struct {
 // ── ClaudeCode OAuth Manager (backed by oauthcache) ────────────────
 
 var claudeCodeAuthManager = oauthcache.NewManager(oauthcache.Config[ClaudeCodeTokenStorage]{
-	Label:           "[CLAUDECODE]",
-	Load:            claudeCodeLoadStorage,
-	Save:            claudeCodeSaveStorage,
-	GetAccessToken:  func(s *ClaudeCodeTokenStorage) string { return s.AccessToken },
-	Copy:            func(s *ClaudeCodeTokenStorage) ClaudeCodeTokenStorage { return *s },
-	Refresh:         claudeCodeRefreshAndUpdate,
+	Label:          "[CLAUDECODE]",
+	Load:           claudeCodeLoadStorage,
+	Save:           claudeCodeSaveStorage,
+	GetAccessToken: func(s *ClaudeCodeTokenStorage) string { return s.AccessToken },
+	Copy:           func(s *ClaudeCodeTokenStorage) ClaudeCodeTokenStorage { return *s },
+	Refresh:        claudeCodeRefreshAndUpdate,
+	Disable: func(path string, s *ClaudeCodeTokenStorage) error {
+		s.Disabled = true
+		return claudeCodeSaveStorage(path, s)
+	},
 })
 
 // claudeCodeRefreshAndUpdate performs the HTTP token refresh and updates storage in-place.
@@ -73,8 +78,11 @@ func claudeCodeRefreshAndUpdate(client *http.Client, storage *ClaudeCodeTokenSto
 	if storage.RefreshToken == "" {
 		return 0, fmt.Errorf("refresh_token is empty in %s", authFile)
 	}
-	tok, err := claudeCodeRefreshAccessToken(client, storage.RefreshToken)
+	tok, statusCode, err := claudeCodeRefreshAccessToken(client, storage.RefreshToken)
 	if err != nil {
+		if statusCode == 401 || statusCode == 403 {
+			return 0, &oauthcache.ErrAuthDisabled{AuthFile: authFile, Reason: err.Error()}
+		}
 		return 0, err
 	}
 
@@ -101,20 +109,15 @@ func claudeCodeRefreshAndUpdate(client *http.Client, storage *ClaudeCodeTokenSto
 // The Claude Code API supports both streaming and non-streaming; when clientWantsStream is false,
 // the SSE output is reassembled into a single JSON response.
 func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
-	if len(upstream.AuthFiles) == 0 {
-		return 0, nil, nil, fmt.Errorf("claudecode upstream %s: auth_files is not configured", upstream.Name)
-	}
-
 	// Get timeout from client
 	timeout := 60 * time.Second
 	if client.Timeout > 0 {
 		timeout = client.Timeout
 	}
 
-	// Get a valid access token (auto-refreshes if needed, round-robin across auth files)
-	authFile := upstream.NextAuthFile()
-	log.Printf("[CLAUDECODE] Using auth file: %s", authFile)
-	accessToken, _, err := claudeCodeAuthManager.GetToken(authFile, timeout)
+	// Get a valid access token (auto-refreshes if needed, skips disabled files)
+	accessToken, _, err := claudeCodeAuthManager.GetTokenWithRetry(
+		upstream.AuthFiles, upstream.AuthFileStartIndex(), timeout, "[CLAUDECODE]")
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("claudecode auth: %w", err)
 	}
@@ -378,7 +381,7 @@ func claudeCodeSSEToJSON(sseData []byte) ([]byte, error) {
 
 // ── Token refresh ──────────────────────────────────────────────────────
 
-func claudeCodeRefreshAccessToken(client *http.Client, refreshTok string) (*ClaudeCodeTokenResponse, error) {
+func claudeCodeRefreshAccessToken(client *http.Client, refreshTok string) (*ClaudeCodeTokenResponse, int, error) {
 	payload := map[string]string{
 		"client_id":     claudeCodeClientID,
 		"grant_type":    "refresh_token",
@@ -388,27 +391,27 @@ func claudeCodeRefreshAccessToken(client *http.Client, refreshTok string) (*Clau
 	reqBody, _ := json.Marshal(payload)
 	req, err := http.NewRequest("POST", claudeCodeTokenURL, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
+		return nil, resp.StatusCode, fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
 	}
 
 	var tok ClaudeCodeTokenResponse
 	if err := json.Unmarshal(body, &tok); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
+		return nil, resp.StatusCode, fmt.Errorf("parse response: %w", err)
 	}
-	return &tok, nil
+	return &tok, resp.StatusCode, nil
 }
 
 // ── Stainless SDK helpers ──────────────────────────────────────────────
@@ -451,6 +454,9 @@ func claudeCodeLoadStorage(path string) (*ClaudeCodeTokenStorage, error) {
 	var s ClaudeCodeTokenStorage
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
+	}
+	if s.Disabled {
+		return nil, &oauthcache.ErrAuthDisabled{AuthFile: path, Reason: "marked disabled on disk"}
 	}
 	return &s, nil
 }

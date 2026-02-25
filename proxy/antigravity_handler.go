@@ -43,6 +43,7 @@ const (
 // AntigravityTokenStorage mirrors the on-disk JSON format for Antigravity auth.
 type AntigravityTokenStorage struct {
 	AccessToken  string `json:"access_token"`
+	Disabled     bool   `json:"disabled,omitempty"`
 	RefreshToken string `json:"refresh_token"`
 	Email        string `json:"email"`
 	ExpiresIn    int64  `json:"expires_in"`
@@ -63,12 +64,16 @@ type AntigravityTokenResponse struct {
 // ── Antigravity OAuth Manager (backed by oauthcache) ───────────────
 
 var antigravityAuthManager = oauthcache.NewManager(oauthcache.Config[AntigravityTokenStorage]{
-	Label:           "[ANTIGRAVITY]",
-	Load:            antigravityLoadStorage,
-	Save:            antigravitySaveStorage,
-	GetAccessToken:  func(s *AntigravityTokenStorage) string { return s.AccessToken },
-	Copy:            func(s *AntigravityTokenStorage) AntigravityTokenStorage { return *s },
-	Refresh:         antigravityRefreshAndUpdate,
+	Label:          "[ANTIGRAVITY]",
+	Load:           antigravityLoadStorage,
+	Save:           antigravitySaveStorage,
+	GetAccessToken: func(s *AntigravityTokenStorage) string { return s.AccessToken },
+	Copy:           func(s *AntigravityTokenStorage) AntigravityTokenStorage { return *s },
+	Refresh:        antigravityRefreshAndUpdate,
+	Disable: func(path string, s *AntigravityTokenStorage) error {
+		s.Disabled = true
+		return antigravitySaveStorage(path, s)
+	},
 })
 
 // antigravityRefreshAndUpdate performs the HTTP token refresh and updates storage in-place.
@@ -76,8 +81,11 @@ func antigravityRefreshAndUpdate(client *http.Client, storage *AntigravityTokenS
 	if storage.RefreshToken == "" {
 		return 0, fmt.Errorf("refresh_token is empty in %s", authFile)
 	}
-	tok, err := antigravityRefreshAccessToken(client, storage.RefreshToken)
+	tok, statusCode, err := antigravityRefreshAccessToken(client, storage.RefreshToken)
 	if err != nil {
+		if statusCode == 401 || statusCode == 403 {
+			return 0, &oauthcache.ErrAuthDisabled{AuthFile: authFile, Reason: err.Error()}
+		}
 		return 0, err
 	}
 
@@ -114,26 +122,21 @@ func antigravityRefreshAndUpdate(client *http.Client, storage *AntigravityTokenS
 // The Antigravity API always uses SSE streaming; when clientWantsStream is false,
 // the SSE output is reassembled into a single Responses-format JSON response.
 func ForwardToAntigravity(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
-	if len(upstream.AuthFiles) == 0 {
-		return 0, nil, nil, fmt.Errorf("antigravity upstream %s: auth_files is not configured", upstream.Name)
-	}
-
 	// Get timeout from client
 	timeout := 60 * time.Second
 	if client.Timeout > 0 {
 		timeout = client.Timeout
 	}
 
-	// Get a valid access token (auto-refreshes if needed, round-robin across auth files)
-	authFile := upstream.NextAuthFile()
-	log.Printf("[ANTIGRAVITY] Using auth file: %s", authFile)
-	accessToken, storage, err := antigravityAuthManager.GetToken(authFile, timeout)
+	// Get a valid access token (auto-refreshes if needed, skips disabled files)
+	accessToken, storage, err := antigravityAuthManager.GetTokenWithRetry(
+		upstream.AuthFiles, upstream.AuthFileStartIndex(), timeout, "[ANTIGRAVITY]")
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("antigravity auth: %w", err)
 	}
 
 	if storage.ProjectID == "" {
-		return 0, nil, nil, fmt.Errorf("project_id is empty for %s", authFile)
+		return 0, nil, nil, fmt.Errorf("project_id is empty for upstream %s", upstream.Name)
 	}
 
 	// Parse request body to extract model and input
@@ -319,7 +322,7 @@ func antigravitySSEToResponsesJSON(sseData []byte) ([]byte, error) {
 
 // ── Token refresh ──────────────────────────────────────────────────────
 
-func antigravityRefreshAccessToken(client *http.Client, refreshTok string) (*AntigravityTokenResponse, error) {
+func antigravityRefreshAccessToken(client *http.Client, refreshTok string) (*AntigravityTokenResponse, int, error) {
 	form := url.Values{
 		"client_id":     {antigravityClientID},
 		"client_secret": {antigravityClientSecret},
@@ -329,27 +332,27 @@ func antigravityRefreshAccessToken(client *http.Client, refreshTok string) (*Ant
 
 	req, err := http.NewRequest("POST", antigravityTokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
+		return nil, resp.StatusCode, fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
 	}
 
 	var tok AntigravityTokenResponse
 	if err := json.Unmarshal(body, &tok); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
+		return nil, resp.StatusCode, fmt.Errorf("parse response: %w", err)
 	}
-	return &tok, nil
+	return &tok, resp.StatusCode, nil
 }
 
 // ── Project ID discovery ───────────────────────────────────────────────
@@ -461,6 +464,9 @@ func antigravityLoadStorage(path string) (*AntigravityTokenStorage, error) {
 	var s AntigravityTokenStorage
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
+	}
+	if s.Disabled {
+		return nil, &oauthcache.ErrAuthDisabled{AuthFile: path, Reason: "marked disabled on disk"}
 	}
 	return &s, nil
 }

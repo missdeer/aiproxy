@@ -64,12 +64,16 @@ type CodexTokenResponse struct {
 // ── Codex OAuth Manager (backed by oauthcache) ─────────────────────────
 
 var codexAuthManager = oauthcache.NewManager(oauthcache.Config[CodexTokenStorage]{
-	Label:           "[CODEX]",
-	Load:            codexLoadStorage,
-	Save:            codexSaveStorage,
-	GetAccessToken:  func(s *CodexTokenStorage) string { return s.AccessToken },
-	Copy:            func(s *CodexTokenStorage) CodexTokenStorage { return *s },
-	Refresh:         codexRefreshAndUpdate,
+	Label:          "[CODEX]",
+	Load:           codexLoadStorage,
+	Save:           codexSaveStorage,
+	GetAccessToken: func(s *CodexTokenStorage) string { return s.AccessToken },
+	Copy:           func(s *CodexTokenStorage) CodexTokenStorage { return *s },
+	Refresh:        codexRefreshAndUpdate,
+	Disable: func(path string, s *CodexTokenStorage) error {
+		s.Disabled = true
+		return codexSaveStorage(path, s)
+	},
 })
 
 // codexRefreshAndUpdate performs the HTTP token refresh and updates storage in-place.
@@ -77,8 +81,11 @@ func codexRefreshAndUpdate(client *http.Client, storage *CodexTokenStorage, auth
 	if storage.RefreshToken == "" {
 		return 0, fmt.Errorf("refresh_token is empty in %s", authFile)
 	}
-	tok, err := codexRefreshAccessToken(client, storage.RefreshToken)
+	tok, statusCode, err := codexRefreshAccessToken(client, storage.RefreshToken)
 	if err != nil {
+		if statusCode == 401 || statusCode == 403 {
+			return 0, &oauthcache.ErrAuthDisabled{AuthFile: authFile, Reason: err.Error()}
+		}
 		return 0, err
 	}
 
@@ -113,20 +120,15 @@ func codexRefreshAndUpdate(client *http.Client, storage *CodexTokenStorage, auth
 // The Codex API always uses SSE streaming; when clientWantsStream is false,
 // the SSE output is reassembled into a single Responses-format JSON response.
 func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
-	if len(upstream.AuthFiles) == 0 {
-		return 0, nil, nil, fmt.Errorf("codex upstream %s: auth_files is not configured", upstream.Name)
-	}
-
 	// Get timeout from client
 	timeout := 60 * time.Second
 	if client.Timeout > 0 {
 		timeout = client.Timeout
 	}
 
-	// Get a valid access token (auto-refreshes if needed, round-robin across auth files)
-	authFile := upstream.NextAuthFile()
-	log.Printf("[CODEX] Using auth file: %s", authFile)
-	accessToken, storage, err := codexAuthManager.GetToken(authFile, timeout)
+	// Get a valid access token (auto-refreshes if needed, skips disabled files)
+	accessToken, storage, err := codexAuthManager.GetTokenWithRetry(
+		upstream.AuthFiles, upstream.AuthFileStartIndex(), timeout, "[CODEX]")
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("codex auth: %w", err)
 	}
@@ -272,7 +274,10 @@ func codexSSEToResponsesJSON(sseData []byte) ([]byte, error) {
 
 // ── Token refresh ──────────────────────────────────────────────────────
 
-func codexRefreshAccessToken(client *http.Client, refreshTok string) (*CodexTokenResponse, error) {
+// codexRefreshAccessToken returns (response, statusCode, error).
+// statusCode is set even on error, enabling the caller to distinguish
+// transient failures from permanent 4xx/5xx auth errors.
+func codexRefreshAccessToken(client *http.Client, refreshTok string) (*CodexTokenResponse, int, error) {
 	form := url.Values{
 		"client_id":     {codexClientID},
 		"grant_type":    {"refresh_token"},
@@ -282,27 +287,27 @@ func codexRefreshAccessToken(client *http.Client, refreshTok string) (*CodexToke
 
 	req, err := http.NewRequest("POST", codexTokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
+		return nil, resp.StatusCode, fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
 	}
 
 	var tok CodexTokenResponse
 	if err := json.Unmarshal(body, &tok); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
+		return nil, resp.StatusCode, fmt.Errorf("parse response: %w", err)
 	}
-	return &tok, nil
+	return &tok, resp.StatusCode, nil
 }
 
 // ── JWT helpers (no signature verification) ────────────────────────────
@@ -346,6 +351,9 @@ func codexLoadStorage(path string) (*CodexTokenStorage, error) {
 	var s CodexTokenStorage
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
+	}
+	if s.Disabled {
+		return nil, &oauthcache.ErrAuthDisabled{AuthFile: path, Reason: "marked disabled on disk"}
 	}
 	return &s, nil
 }
