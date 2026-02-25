@@ -2,6 +2,9 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -166,6 +169,30 @@ func Load(path string) (*Config, error) {
 		// If heartbeat is enabled but interval is 0, disable heartbeat
 		if cfg.Upstreams[i].Heartbeat && cfg.Upstreams[i].HeartbeatInterval == 0 {
 			cfg.Upstreams[i].Heartbeat = false
+		}
+		// Deduplicate AuthFiles using normalized absolute paths.
+		// Relative paths are resolved against the process CWD (not the config file location).
+		// On Windows and macOS, comparison is always case-insensitive. This is intentional:
+		// the vast majority of these volumes are case-insensitive by default, and the
+		// simplicity outweighs the edge case of case-sensitive APFS/NTFS volumes.
+		if len(cfg.Upstreams[i].AuthFiles) > 1 {
+			caseInsensitive := runtime.GOOS == "windows" || runtime.GOOS == "darwin"
+			seen := make(map[string]struct{})
+			unique := make([]string, 0, len(cfg.Upstreams[i].AuthFiles))
+			for _, f := range cfg.Upstreams[i].AuthFiles {
+				key := f
+				if abs, err := filepath.Abs(f); err == nil {
+					key = abs
+				}
+				if caseInsensitive {
+					key = strings.ToLower(key)
+				}
+				if _, dup := seen[key]; !dup {
+					seen[key] = struct{}{}
+					unique = append(unique, f)
+				}
+			}
+			cfg.Upstreams[i].AuthFiles = unique
 		}
 	}
 
