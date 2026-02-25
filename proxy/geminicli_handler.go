@@ -18,10 +18,10 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/missdeer/aiproxy/config"
+	"github.com/missdeer/aiproxy/oauthcache"
 	"github.com/missdeer/aiproxy/upstreammeta"
 	"github.com/tidwall/gjson"
 )
@@ -55,93 +55,64 @@ type GeminiCLITokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
-// ── GeminiCLIAuth: manages token lifecycle for a single auth file ────────
+// ── GeminiCLI OAuth Manager (backed by oauthcache) ─────────────────
 
-// GeminiCLIAuth caches and auto-refreshes an OAuth token for a Gemini CLI auth file.
-type GeminiCLIAuth struct {
-	mu        sync.RWMutex
-	authFile  string
-	storage   *GeminiCLITokenStorage
-	expiresAt time.Time
-	client    *http.Client
-}
+var geminiCLIAuthManager = oauthcache.NewManager(oauthcache.Config[GeminiCLITokenStorage]{
+	Label: "[GEMINICLI]",
+	Load:  geminiCLILoadStorage,
+	Save:  geminiCLISaveStorage,
+	GetAccessToken: func(s *GeminiCLITokenStorage) string {
+		return geminiCLIStringValue(s.Token, "access_token")
+	},
+	Copy: func(s *GeminiCLITokenStorage) GeminiCLITokenStorage {
+		c := *s
+		c.Token = geminiCLICopyTokenMap(s.Token)
+		return c
+	},
+	Refresh: geminiCLIRefreshAndUpdate,
+})
 
-// NewGeminiCLIAuth creates a new GeminiCLIAuth for the given auth file path.
-func NewGeminiCLIAuth(authFile string, timeout time.Duration) *GeminiCLIAuth {
-	return &GeminiCLIAuth{
-		authFile: authFile,
-		client:   &http.Client{Timeout: timeout},
-	}
-}
-
-// GetAccessToken returns a valid access token, refreshing if necessary.
-func (ga *GeminiCLIAuth) GetAccessToken() (string, *GeminiCLITokenStorage, error) {
-	ga.mu.RLock()
-	if ga.storage != nil && time.Now().Before(ga.expiresAt.Add(-60*time.Second)) {
-		token := geminiCLIStringValue(ga.storage.Token, "access_token")
-		storage := *ga.storage // copy
-		ga.mu.RUnlock()
-		return token, &storage, nil
-	}
-	ga.mu.RUnlock()
-
-	ga.mu.Lock()
-	defer ga.mu.Unlock()
-
-	// Double check after acquiring write lock
-	if ga.storage != nil && time.Now().Before(ga.expiresAt.Add(-60*time.Second)) {
-		storage := *ga.storage
-		return geminiCLIStringValue(ga.storage.Token, "access_token"), &storage, nil
-	}
-
-	// Load from file
-	storage, err := geminiCLILoadStorage(ga.authFile)
-	if err != nil {
-		return "", nil, fmt.Errorf("load auth file %s: %w", ga.authFile, err)
-	}
+// geminiCLIRefreshAndUpdate handles the full GeminiCLI refresh flow:
+//  1. If the existing access_token is still valid (>5min to expiry), just discover ProjectID.
+//  2. Otherwise, perform an HTTP token refresh.
+func geminiCLIRefreshAndUpdate(client *http.Client, storage *GeminiCLITokenStorage, authFile string) (time.Duration, error) {
 	if storage.Token == nil {
-		return "", nil, fmt.Errorf("token is empty in %s", ga.authFile)
+		return 0, fmt.Errorf("token is empty in %s", authFile)
 	}
 
-	// Extract current token
 	accessToken := geminiCLIStringValue(storage.Token, "access_token")
 	refreshToken := geminiCLIStringValue(storage.Token, "refresh_token")
 	expiry := geminiCLIStringValue(storage.Token, "expiry")
 
-	// Check if token is still valid
+	// Check if existing token is still valid
 	if accessToken != "" && expiry != "" {
 		if exp, err := time.Parse(time.RFC3339, expiry); err == nil {
 			if time.Until(exp) > 5*time.Minute {
-				// Discover project_id if not present (may have been missing when token was first cached)
+				// Token still valid, just discover project_id if needed
 				if storage.ProjectID == "" {
 					log.Printf("[GEMINICLI] Discovering project_id for %s (cached token)", storage.Email)
-					pid, errPid := geminiCLIFetchProjectID(ga.client, accessToken)
+					pid, errPid := geminiCLIFetchProjectID(client, accessToken)
 					if errPid != nil {
 						log.Printf("[GEMINICLI] Warning: failed to discover project_id: %v", errPid)
-						// Don't cache storage so next call retries discovery
-						return accessToken, storage, nil
+						// Return 0 expiresIn so the manager won't cache, allowing retry next call
+						return 0, nil
 					}
 					storage.ProjectID = pid
-					if err := geminiCLISaveStorage(ga.authFile, storage); err != nil {
-						log.Printf("[GEMINICLI] Warning: could not save project_id to %s: %v", ga.authFile, err)
-					}
 				}
-				ga.storage = storage
-				ga.expiresAt = exp
-				return accessToken, storage, nil
+				return time.Until(exp), nil
 			}
 		}
 	}
 
-	// Refresh token
+	// Token expired or missing, refresh it
 	if refreshToken == "" {
-		return "", nil, fmt.Errorf("no refresh_token available in %s", ga.authFile)
+		return 0, fmt.Errorf("no refresh_token available in %s", authFile)
 	}
 
-	log.Printf("[GEMINICLI] Refreshing token for %s (file: %s)", storage.Email, ga.authFile)
-	tok, err := geminiCLIRefreshAccessToken(ga.client, refreshToken)
+	log.Printf("[GEMINICLI] Refreshing token for %s (file: %s)", storage.Email, authFile)
+	tok, err := geminiCLIRefreshAccessToken(client, refreshToken)
 	if err != nil {
-		return "", nil, fmt.Errorf("token refresh for %s: %w", ga.authFile, err)
+		return 0, err
 	}
 
 	// Update storage fields
@@ -150,16 +121,16 @@ func (ga *GeminiCLIAuth) GetAccessToken() (string, *GeminiCLITokenStorage, error
 	if tok.RefreshToken != "" {
 		storage.Token["refresh_token"] = tok.RefreshToken
 	}
+	var expiresIn time.Duration
 	if tok.ExpiresIn > 0 {
-		expiry := time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
-		storage.Token["expiry"] = expiry.Format(time.RFC3339)
-		ga.expiresAt = expiry
+		expiresIn = time.Duration(tok.ExpiresIn) * time.Second
+		storage.Token["expiry"] = time.Now().Add(expiresIn).Format(time.RFC3339)
 	}
 
 	// Discover project_id if not present
 	if storage.ProjectID == "" {
 		log.Printf("[GEMINICLI] Discovering project_id for %s", storage.Email)
-		pid, errPid := geminiCLIFetchProjectID(ga.client, tok.AccessToken)
+		pid, errPid := geminiCLIFetchProjectID(client, tok.AccessToken)
 		if errPid != nil {
 			log.Printf("[GEMINICLI] Warning: failed to discover project_id: %v", errPid)
 		} else {
@@ -167,44 +138,8 @@ func (ga *GeminiCLIAuth) GetAccessToken() (string, *GeminiCLITokenStorage, error
 		}
 	}
 
-	// Save back to file
-	if err := geminiCLISaveStorage(ga.authFile, storage); err != nil {
-		log.Printf("[GEMINICLI] Warning: could not save updated tokens to %s: %v", ga.authFile, err)
-	}
-
-	ga.storage = storage
 	log.Printf("[GEMINICLI] Token refreshed for %s, project_id: %s", storage.Email, storage.ProjectID)
-
-	storageCopy := *storage
-	return tok.AccessToken, &storageCopy, nil
-}
-
-// ── Global auth cache ──────────────────────────────────────────────────
-
-var (
-	geminiCLIAuthCacheMu sync.RWMutex
-	geminiCLIAuthCache   = make(map[string]*GeminiCLIAuth)
-)
-
-func getGeminiCLIAuth(authFile string, timeout time.Duration) *GeminiCLIAuth {
-	geminiCLIAuthCacheMu.RLock()
-	auth, ok := geminiCLIAuthCache[authFile]
-	geminiCLIAuthCacheMu.RUnlock()
-	if ok {
-		return auth
-	}
-
-	geminiCLIAuthCacheMu.Lock()
-	defer geminiCLIAuthCacheMu.Unlock()
-
-	// Double check
-	if auth, ok := geminiCLIAuthCache[authFile]; ok {
-		return auth
-	}
-
-	auth = NewGeminiCLIAuth(authFile, timeout)
-	geminiCLIAuthCache[authFile] = auth
-	return auth
+	return expiresIn, nil
 }
 
 // ── ForwardToGeminiCLI: called by other handlers' forwardRequest ──────────
@@ -228,8 +163,7 @@ func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBo
 	// Get a valid access token (auto-refreshes if needed, round-robin across auth files)
 	authFile := upstream.NextAuthFile()
 	log.Printf("[GEMINICLI] Using auth file: %s", authFile)
-	auth := getGeminiCLIAuth(authFile, timeout)
-	accessToken, storage, err := auth.GetAccessToken()
+	accessToken, storage, err := geminiCLIAuthManager.GetToken(authFile, timeout)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("geminicli auth: %w", err)
 	}
@@ -535,4 +469,16 @@ func geminiCLIStringValue(m map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+// geminiCLICopyTokenMap returns a shallow copy of the token map for safe async use.
+func geminiCLICopyTokenMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	copy := make(map[string]any, len(m))
+	for k, v := range m {
+		copy[k] = v
+	}
+	return copy
 }

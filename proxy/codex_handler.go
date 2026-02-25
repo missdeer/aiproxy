@@ -21,10 +21,10 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/missdeer/aiproxy/config"
+	"github.com/missdeer/aiproxy/oauthcache"
 	"github.com/missdeer/aiproxy/upstreammeta"
 )
 
@@ -61,59 +61,25 @@ type CodexTokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
-// ── CodexAuth: manages token lifecycle for a single auth file ────────
+// ── Codex OAuth Manager (backed by oauthcache) ─────────────────────────
 
-// CodexAuth caches and auto-refreshes an OAuth token for a Codex auth file.
-type CodexAuth struct {
-	mu        sync.RWMutex
-	authFile  string
-	storage   *CodexTokenStorage
-	expiresAt time.Time
-	client    *http.Client
-}
+var codexAuthManager = oauthcache.NewManager(oauthcache.Config[CodexTokenStorage]{
+	Label:           "[CODEX]",
+	Load:            codexLoadStorage,
+	Save:            codexSaveStorage,
+	GetAccessToken:  func(s *CodexTokenStorage) string { return s.AccessToken },
+	Copy:            func(s *CodexTokenStorage) CodexTokenStorage { return *s },
+	Refresh:         codexRefreshAndUpdate,
+})
 
-// NewCodexAuth creates a new CodexAuth for the given auth file path.
-func NewCodexAuth(authFile string, timeout time.Duration) *CodexAuth {
-	return &CodexAuth{
-		authFile: authFile,
-		client:   &http.Client{Timeout: timeout},
-	}
-}
-
-// GetAccessToken returns a valid access token, refreshing if necessary.
-func (ca *CodexAuth) GetAccessToken() (string, *CodexTokenStorage, error) {
-	ca.mu.RLock()
-	if ca.storage != nil && time.Now().Before(ca.expiresAt.Add(-60*time.Second)) {
-		token := ca.storage.AccessToken
-		storage := *ca.storage // copy
-		ca.mu.RUnlock()
-		return token, &storage, nil
-	}
-	ca.mu.RUnlock()
-
-	ca.mu.Lock()
-	defer ca.mu.Unlock()
-
-	// Double check after acquiring write lock
-	if ca.storage != nil && time.Now().Before(ca.expiresAt.Add(-60*time.Second)) {
-		storage := *ca.storage
-		return ca.storage.AccessToken, &storage, nil
-	}
-
-	// Load from file
-	storage, err := codexLoadStorage(ca.authFile)
-	if err != nil {
-		return "", nil, fmt.Errorf("load auth file %s: %w", ca.authFile, err)
-	}
+// codexRefreshAndUpdate performs the HTTP token refresh and updates storage in-place.
+func codexRefreshAndUpdate(client *http.Client, storage *CodexTokenStorage, authFile string) (time.Duration, error) {
 	if storage.RefreshToken == "" {
-		return "", nil, fmt.Errorf("refresh_token is empty in %s", ca.authFile)
+		return 0, fmt.Errorf("refresh_token is empty in %s", authFile)
 	}
-
-	// Refresh the token
-	log.Printf("[CODEX] Refreshing token for %s (file: %s)", storage.Email, ca.authFile)
-	tok, err := codexRefreshAccessToken(ca.client, storage.RefreshToken)
+	tok, err := codexRefreshAccessToken(client, storage.RefreshToken)
 	if err != nil {
-		return "", nil, fmt.Errorf("token refresh for %s: %w", ca.authFile, err)
+		return 0, err
 	}
 
 	// Update storage fields
@@ -135,45 +101,8 @@ func (ca *CodexAuth) GetAccessToken() (string, *CodexTokenStorage, error) {
 	storage.Expired = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).Format(time.RFC3339)
 	storage.LastRefresh = time.Now().Format(time.RFC3339)
 
-	// Save back to file
-	if err := codexSaveStorage(ca.authFile, storage); err != nil {
-		log.Printf("[CODEX] Warning: could not save updated tokens to %s: %v", ca.authFile, err)
-	}
-
-	ca.storage = storage
-	ca.expiresAt = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
 	log.Printf("[CODEX] Token refreshed for %s, expires %s", storage.Email, storage.Expired)
-
-	storageCopy := *storage
-	return storage.AccessToken, &storageCopy, nil
-}
-
-// ── Global auth cache ──────────────────────────────────────────────────
-
-var (
-	codexAuthCacheMu sync.RWMutex
-	codexAuthCache   = make(map[string]*CodexAuth)
-)
-
-func getCodexAuth(authFile string, timeout time.Duration) *CodexAuth {
-	codexAuthCacheMu.RLock()
-	auth, ok := codexAuthCache[authFile]
-	codexAuthCacheMu.RUnlock()
-	if ok {
-		return auth
-	}
-
-	codexAuthCacheMu.Lock()
-	defer codexAuthCacheMu.Unlock()
-
-	// Double check
-	if auth, ok := codexAuthCache[authFile]; ok {
-		return auth
-	}
-
-	auth = NewCodexAuth(authFile, timeout)
-	codexAuthCache[authFile] = auth
-	return auth
+	return time.Duration(tok.ExpiresIn) * time.Second, nil
 }
 
 // ── ForwardToCodex: called by other handlers' forwardRequest ──────────
@@ -197,8 +126,7 @@ func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody [
 	// Get a valid access token (auto-refreshes if needed, round-robin across auth files)
 	authFile := upstream.NextAuthFile()
 	log.Printf("[CODEX] Using auth file: %s", authFile)
-	auth := getCodexAuth(authFile, timeout)
-	accessToken, storage, err := auth.GetAccessToken()
+	accessToken, storage, err := codexAuthManager.GetToken(authFile, timeout)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("codex auth: %w", err)
 	}

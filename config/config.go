@@ -33,8 +33,8 @@ type Upstream struct {
 	ModelMappings     ModelMapping `yaml:"model_mappings"`
 	AvailableModels   []string     `yaml:"available_models"`
 	MustStream        bool         `yaml:"must_stream"`
-	APIType           APIType      `yaml:"api_type"`   // "anthropic", "openai", "gemini", "responses", or "codex"
-	AuthFiles         []string     `yaml:"auth_files"` // Paths to auth JSON files (used by codex api_type, round-robin)
+	APIType           APIType      `yaml:"api_type"`           // "anthropic", "openai", "gemini", "responses", or "codex"
+	AuthFiles         []string     `yaml:"auth_files"`         // Paths to auth JSON files (used by codex api_type, round-robin)
 	Heartbeat         bool         `yaml:"heartbeat"`          // Enable heartbeat keepalive (default: false)
 	HeartbeatInterval int          `yaml:"heartbeat_interval"` // Heartbeat interval in seconds (default: 0, disabled)
 }
@@ -79,21 +79,12 @@ func (u *Upstream) NextAuthFile() string {
 }
 
 // Global round-robin counters for auth files, keyed by upstream name.
-var (
-	authFileCounterMu sync.Mutex
-	authFileCounters  = make(map[string]*uint64)
-)
+var authFileCounters sync.Map // map[string]*atomic.Uint64
 
 func nextAuthFileIndex(name string, n int) int {
-	authFileCounterMu.Lock()
-	ctr, ok := authFileCounters[name]
-	if !ok {
-		var zero uint64
-		ctr = &zero
-		authFileCounters[name] = ctr
-	}
-	authFileCounterMu.Unlock()
-	idx := atomic.AddUint64(ctr, 1) - 1
+	v, _ := authFileCounters.LoadOrStore(name, &atomic.Uint64{})
+	ctr := v.(*atomic.Uint64)
+	idx := ctr.Add(1) - 1
 	return int(idx % uint64(n))
 }
 

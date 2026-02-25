@@ -18,10 +18,10 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/missdeer/aiproxy/config"
+	"github.com/missdeer/aiproxy/oauthcache"
 	"github.com/missdeer/aiproxy/upstreammeta"
 )
 
@@ -57,59 +57,25 @@ type ClaudeCodeTokenResponse struct {
 	} `json:"account"`
 }
 
-// ── ClaudeCodeAuth: manages token lifecycle for a single auth file ────────
+// ── ClaudeCode OAuth Manager (backed by oauthcache) ────────────────
 
-// ClaudeCodeAuth caches and auto-refreshes an OAuth token for a Claude Code auth file.
-type ClaudeCodeAuth struct {
-	mu        sync.RWMutex
-	authFile  string
-	storage   *ClaudeCodeTokenStorage
-	expiresAt time.Time
-	client    *http.Client
-}
+var claudeCodeAuthManager = oauthcache.NewManager(oauthcache.Config[ClaudeCodeTokenStorage]{
+	Label:           "[CLAUDECODE]",
+	Load:            claudeCodeLoadStorage,
+	Save:            claudeCodeSaveStorage,
+	GetAccessToken:  func(s *ClaudeCodeTokenStorage) string { return s.AccessToken },
+	Copy:            func(s *ClaudeCodeTokenStorage) ClaudeCodeTokenStorage { return *s },
+	Refresh:         claudeCodeRefreshAndUpdate,
+})
 
-// NewClaudeCodeAuth creates a new ClaudeCodeAuth for the given auth file path.
-func NewClaudeCodeAuth(authFile string, timeout time.Duration) *ClaudeCodeAuth {
-	return &ClaudeCodeAuth{
-		authFile: authFile,
-		client:   &http.Client{Timeout: timeout},
-	}
-}
-
-// GetAccessToken returns a valid access token, refreshing if necessary.
-func (ca *ClaudeCodeAuth) GetAccessToken() (string, *ClaudeCodeTokenStorage, error) {
-	ca.mu.RLock()
-	if ca.storage != nil && time.Now().Before(ca.expiresAt.Add(-60*time.Second)) {
-		token := ca.storage.AccessToken
-		storage := *ca.storage // copy
-		ca.mu.RUnlock()
-		return token, &storage, nil
-	}
-	ca.mu.RUnlock()
-
-	ca.mu.Lock()
-	defer ca.mu.Unlock()
-
-	// Double check after acquiring write lock
-	if ca.storage != nil && time.Now().Before(ca.expiresAt.Add(-60*time.Second)) {
-		storage := *ca.storage
-		return ca.storage.AccessToken, &storage, nil
-	}
-
-	// Load from file
-	storage, err := claudeCodeLoadStorage(ca.authFile)
-	if err != nil {
-		return "", nil, fmt.Errorf("load auth file %s: %w", ca.authFile, err)
-	}
+// claudeCodeRefreshAndUpdate performs the HTTP token refresh and updates storage in-place.
+func claudeCodeRefreshAndUpdate(client *http.Client, storage *ClaudeCodeTokenStorage, authFile string) (time.Duration, error) {
 	if storage.RefreshToken == "" {
-		return "", nil, fmt.Errorf("refresh_token is empty in %s", ca.authFile)
+		return 0, fmt.Errorf("refresh_token is empty in %s", authFile)
 	}
-
-	// Refresh the token
-	log.Printf("[CLAUDECODE] Refreshing token for %s (file: %s)", storage.Email, ca.authFile)
-	tok, err := claudeCodeRefreshAccessToken(ca.client, storage.RefreshToken)
+	tok, err := claudeCodeRefreshAccessToken(client, storage.RefreshToken)
 	if err != nil {
-		return "", nil, fmt.Errorf("token refresh for %s: %w", ca.authFile, err)
+		return 0, err
 	}
 
 	// Update storage fields
@@ -123,45 +89,8 @@ func (ca *ClaudeCodeAuth) GetAccessToken() (string, *ClaudeCodeTokenStorage, err
 	storage.Expire = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).Format(time.RFC3339)
 	storage.LastRefresh = time.Now().Format(time.RFC3339)
 
-	// Save back to file
-	if err := claudeCodeSaveStorage(ca.authFile, storage); err != nil {
-		log.Printf("[CLAUDECODE] Warning: could not save updated tokens to %s: %v", ca.authFile, err)
-	}
-
-	ca.storage = storage
-	ca.expiresAt = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
 	log.Printf("[CLAUDECODE] Token refreshed for %s, expires %s", storage.Email, storage.Expire)
-
-	storageCopy := *storage
-	return storage.AccessToken, &storageCopy, nil
-}
-
-// ── Global auth cache ──────────────────────────────────────────────────
-
-var (
-	claudeCodeAuthCacheMu sync.RWMutex
-	claudeCodeAuthCache   = make(map[string]*ClaudeCodeAuth)
-)
-
-func getClaudeCodeAuth(authFile string, timeout time.Duration) *ClaudeCodeAuth {
-	claudeCodeAuthCacheMu.RLock()
-	auth, ok := claudeCodeAuthCache[authFile]
-	claudeCodeAuthCacheMu.RUnlock()
-	if ok {
-		return auth
-	}
-
-	claudeCodeAuthCacheMu.Lock()
-	defer claudeCodeAuthCacheMu.Unlock()
-
-	// Double check
-	if auth, ok := claudeCodeAuthCache[authFile]; ok {
-		return auth
-	}
-
-	auth = NewClaudeCodeAuth(authFile, timeout)
-	claudeCodeAuthCache[authFile] = auth
-	return auth
+	return time.Duration(tok.ExpiresIn) * time.Second, nil
 }
 
 // ── ForwardToClaudeCode: called by other handlers' forwardRequest ──────────
@@ -185,8 +114,7 @@ func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestB
 	// Get a valid access token (auto-refreshes if needed, round-robin across auth files)
 	authFile := upstream.NextAuthFile()
 	log.Printf("[CLAUDECODE] Using auth file: %s", authFile)
-	auth := getClaudeCodeAuth(authFile, timeout)
-	accessToken, _, err := auth.GetAccessToken()
+	accessToken, _, err := claudeCodeAuthManager.GetToken(authFile, timeout)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("claudecode auth: %w", err)
 	}

@@ -229,8 +229,7 @@ func TestClaudeCodeAuth_GetAccessToken_RefreshesAndCaches(t *testing.T) {
 
 	var refreshCallCount atomic.Int32
 
-	ca := NewClaudeCodeAuth(authFile, 30*time.Second)
-	ca.client = &http.Client{
+	ca := &http.Client{
 		Transport: &mockRoundTripper{
 			handler: func(req *http.Request) (*http.Response, error) {
 				refreshCallCount.Add(1)
@@ -251,8 +250,11 @@ func TestClaudeCodeAuth_GetAccessToken_RefreshesAndCaches(t *testing.T) {
 		},
 	}
 
+	claudeCodeAuthManager.StoreEntry(authFile, initial, time.Time{}, ca)
+	defer claudeCodeAuthManager.DeleteEntry(authFile)
+
 	// First call triggers refresh
-	token1, stor1, err := ca.GetAccessToken()
+	token1, stor1, err := claudeCodeAuthManager.GetToken(authFile, 30*time.Second)
 	if err != nil {
 		t.Fatalf("first GetAccessToken() error = %v", err)
 	}
@@ -267,7 +269,7 @@ func TestClaudeCodeAuth_GetAccessToken_RefreshesAndCaches(t *testing.T) {
 	}
 
 	// Second call uses cache
-	token2, _, err := ca.GetAccessToken()
+	token2, _, err := claudeCodeAuthManager.GetToken(authFile, 30*time.Second)
 	if err != nil {
 		t.Fatalf("second GetAccessToken() error = %v", err)
 	}
@@ -287,16 +289,16 @@ func TestClaudeCodeAuth_GetAccessToken_EmptyRefreshToken(t *testing.T) {
 	data, _ := json.Marshal(s)
 	os.WriteFile(authFile, data, 0644)
 
-	ca := NewClaudeCodeAuth(authFile, 30*time.Second)
-	_, _, err := ca.GetAccessToken()
+	claudeCodeAuthManager.StoreEntry(authFile, s, time.Time{}, &http.Client{Timeout: 30 * time.Second})
+	defer claudeCodeAuthManager.DeleteEntry(authFile)
+	_, _, err := claudeCodeAuthManager.GetToken(authFile, 30*time.Second)
 	if err == nil {
 		t.Fatal("expected error for empty refresh_token")
 	}
 }
 
 func TestClaudeCodeAuth_GetAccessToken_FileNotFound(t *testing.T) {
-	ca := NewClaudeCodeAuth("/nonexistent/auth.json", 30*time.Second)
-	_, _, err := ca.GetAccessToken()
+	_, _, err := claudeCodeAuthManager.GetToken("/nonexistent/auth.json", 30*time.Second)
 	if err == nil {
 		t.Fatal("expected error for missing auth file")
 	}
@@ -310,8 +312,7 @@ func TestClaudeCodeAuth_GetAccessToken_RefreshFails(t *testing.T) {
 	data, _ := json.Marshal(s)
 	os.WriteFile(authFile, data, 0644)
 
-	ca := NewClaudeCodeAuth(authFile, 30*time.Second)
-	ca.client = &http.Client{
+	ca := &http.Client{
 		Transport: &mockRoundTripper{
 			handler: func(req *http.Request) (*http.Response, error) {
 				return &http.Response{
@@ -323,7 +324,10 @@ func TestClaudeCodeAuth_GetAccessToken_RefreshFails(t *testing.T) {
 		},
 	}
 
-	_, _, err := ca.GetAccessToken()
+	claudeCodeAuthManager.StoreEntry(authFile, s, time.Time{}, ca)
+	defer claudeCodeAuthManager.DeleteEntry(authFile)
+
+	_, _, err := claudeCodeAuthManager.GetToken(authFile, 30*time.Second)
 	if err == nil {
 		t.Fatal("expected error when refresh fails")
 	}

@@ -18,11 +18,11 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/missdeer/aiproxy/config"
+	"github.com/missdeer/aiproxy/oauthcache"
 	"github.com/missdeer/aiproxy/upstreammeta"
 	"github.com/tidwall/gjson"
 )
@@ -60,59 +60,25 @@ type AntigravityTokenResponse struct {
 	TokenType    string `json:"token_type"`
 }
 
-// ── AntigravityAuth: manages token lifecycle for a single auth file ────────
+// ── Antigravity OAuth Manager (backed by oauthcache) ───────────────
 
-// AntigravityAuth caches and auto-refreshes an OAuth token for an Antigravity auth file.
-type AntigravityAuth struct {
-	mu        sync.RWMutex
-	authFile  string
-	storage   *AntigravityTokenStorage
-	expiresAt time.Time
-	client    *http.Client
-}
+var antigravityAuthManager = oauthcache.NewManager(oauthcache.Config[AntigravityTokenStorage]{
+	Label:           "[ANTIGRAVITY]",
+	Load:            antigravityLoadStorage,
+	Save:            antigravitySaveStorage,
+	GetAccessToken:  func(s *AntigravityTokenStorage) string { return s.AccessToken },
+	Copy:            func(s *AntigravityTokenStorage) AntigravityTokenStorage { return *s },
+	Refresh:         antigravityRefreshAndUpdate,
+})
 
-// NewAntigravityAuth creates a new AntigravityAuth for the given auth file path.
-func NewAntigravityAuth(authFile string, timeout time.Duration) *AntigravityAuth {
-	return &AntigravityAuth{
-		authFile: authFile,
-		client:   &http.Client{Timeout: timeout},
-	}
-}
-
-// GetAccessToken returns a valid access token, refreshing if necessary.
-func (aa *AntigravityAuth) GetAccessToken() (string, *AntigravityTokenStorage, error) {
-	aa.mu.RLock()
-	if aa.storage != nil && time.Now().Before(aa.expiresAt.Add(-60*time.Second)) {
-		token := aa.storage.AccessToken
-		storage := *aa.storage // copy
-		aa.mu.RUnlock()
-		return token, &storage, nil
-	}
-	aa.mu.RUnlock()
-
-	aa.mu.Lock()
-	defer aa.mu.Unlock()
-
-	// Double check after acquiring write lock
-	if aa.storage != nil && time.Now().Before(aa.expiresAt.Add(-60*time.Second)) {
-		storage := *aa.storage
-		return aa.storage.AccessToken, &storage, nil
-	}
-
-	// Load from file
-	storage, err := antigravityLoadStorage(aa.authFile)
-	if err != nil {
-		return "", nil, fmt.Errorf("load auth file %s: %w", aa.authFile, err)
-	}
+// antigravityRefreshAndUpdate performs the HTTP token refresh and updates storage in-place.
+func antigravityRefreshAndUpdate(client *http.Client, storage *AntigravityTokenStorage, authFile string) (time.Duration, error) {
 	if storage.RefreshToken == "" {
-		return "", nil, fmt.Errorf("refresh_token is empty in %s", aa.authFile)
+		return 0, fmt.Errorf("refresh_token is empty in %s", authFile)
 	}
-
-	// Refresh the token
-	log.Printf("[ANTIGRAVITY] Refreshing token for %s (file: %s)", storage.Email, aa.authFile)
-	tok, err := antigravityRefreshAccessToken(aa.client, storage.RefreshToken)
+	tok, err := antigravityRefreshAccessToken(client, storage.RefreshToken)
 	if err != nil {
-		return "", nil, fmt.Errorf("token refresh for %s: %w", aa.authFile, err)
+		return 0, err
 	}
 
 	// Update storage fields
@@ -128,7 +94,7 @@ func (aa *AntigravityAuth) GetAccessToken() (string, *AntigravityTokenStorage, e
 	// Discover project_id if not present
 	if storage.ProjectID == "" {
 		log.Printf("[ANTIGRAVITY] Discovering project_id for %s", storage.Email)
-		pid, errPid := antigravityFetchProjectID(aa.client, tok.AccessToken)
+		pid, errPid := antigravityFetchProjectID(client, tok.AccessToken)
 		if errPid != nil {
 			log.Printf("[ANTIGRAVITY] Warning: failed to discover project_id: %v", errPid)
 		} else {
@@ -136,45 +102,8 @@ func (aa *AntigravityAuth) GetAccessToken() (string, *AntigravityTokenStorage, e
 		}
 	}
 
-	// Save back to file
-	if err := antigravitySaveStorage(aa.authFile, storage); err != nil {
-		log.Printf("[ANTIGRAVITY] Warning: could not save updated tokens to %s: %v", aa.authFile, err)
-	}
-
-	aa.storage = storage
-	aa.expiresAt = now.Add(time.Duration(tok.ExpiresIn) * time.Second)
 	log.Printf("[ANTIGRAVITY] Token refreshed for %s, expires %s, project_id: %s", storage.Email, storage.Expired, storage.ProjectID)
-
-	storageCopy := *storage
-	return storage.AccessToken, &storageCopy, nil
-}
-
-// ── Global auth cache ──────────────────────────────────────────────────
-
-var (
-	antigravityAuthCacheMu sync.RWMutex
-	antigravityAuthCache   = make(map[string]*AntigravityAuth)
-)
-
-func getAntigravityAuth(authFile string, timeout time.Duration) *AntigravityAuth {
-	antigravityAuthCacheMu.RLock()
-	auth, ok := antigravityAuthCache[authFile]
-	antigravityAuthCacheMu.RUnlock()
-	if ok {
-		return auth
-	}
-
-	antigravityAuthCacheMu.Lock()
-	defer antigravityAuthCacheMu.Unlock()
-
-	// Double check
-	if auth, ok := antigravityAuthCache[authFile]; ok {
-		return auth
-	}
-
-	auth = NewAntigravityAuth(authFile, timeout)
-	antigravityAuthCache[authFile] = auth
-	return auth
+	return time.Duration(tok.ExpiresIn) * time.Second, nil
 }
 
 // ── ForwardToAntigravity: called by other handlers' forwardRequest ──────────
@@ -198,8 +127,7 @@ func ForwardToAntigravity(client *http.Client, upstream config.Upstream, request
 	// Get a valid access token (auto-refreshes if needed, round-robin across auth files)
 	authFile := upstream.NextAuthFile()
 	log.Printf("[ANTIGRAVITY] Using auth file: %s", authFile)
-	auth := getAntigravityAuth(authFile, timeout)
-	accessToken, storage, err := auth.GetAccessToken()
+	accessToken, storage, err := antigravityAuthManager.GetToken(authFile, timeout)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("antigravity auth: %w", err)
 	}

@@ -42,9 +42,7 @@ func TestGeminiCLIAuth_ProjectIDRetryAfterFailure(t *testing.T) {
 		t.Fatalf("write auth file: %v", err)
 	}
 
-	ga := NewGeminiCLIAuth(authFile, 30*time.Second)
-	// Override the HTTP client with a mock transport
-	ga.client = &http.Client{
+	mockClient := &http.Client{
 		Transport: &mockRoundTripper{
 			handler: func(req *http.Request) (*http.Response, error) {
 				count := discoveryCallCount.Add(1)
@@ -69,10 +67,13 @@ func TestGeminiCLIAuth_ProjectIDRetryAfterFailure(t *testing.T) {
 		},
 	}
 
-	// First call: project discovery fails, should NOT cache storage in-memory
-	token1, stor1, err := ga.GetAccessToken()
+	geminiCLIAuthManager.StoreEntry(authFile, storage, time.Time{}, mockClient)
+	defer geminiCLIAuthManager.DeleteEntry(authFile)
+
+	// First call: project discovery fails, should not cache (expiresIn=0 returned)
+	token1, stor1, err := geminiCLIAuthManager.GetToken(authFile, 30*time.Second)
 	if err != nil {
-		t.Fatalf("first GetAccessToken() error = %v", err)
+		t.Fatalf("first GetToken() error = %v", err)
 	}
 	if token1 != "test-token" {
 		t.Fatalf("token = %q, want %q", token1, "test-token")
@@ -80,21 +81,15 @@ func TestGeminiCLIAuth_ProjectIDRetryAfterFailure(t *testing.T) {
 	if stor1.ProjectID != "" {
 		t.Fatalf("first call: ProjectID = %q, want empty", stor1.ProjectID)
 	}
-	// Verify storage was NOT cached (ga.storage should remain nil)
-	ga.mu.RLock()
-	cachedAfterFirst := ga.storage
-	ga.mu.RUnlock()
-	if cachedAfterFirst != nil {
-		t.Fatal("storage should NOT be cached after failed project_id discovery")
-	}
+
 	if c := discoveryCallCount.Load(); c != 1 {
 		t.Fatalf("discovery calls = %d, want 1", c)
 	}
 
-	// Second call: should retry discovery (reload from file), succeed this time
-	token2, stor2, err := ga.GetAccessToken()
+	// Second call: should retry discovery, succeed this time
+	token2, stor2, err := geminiCLIAuthManager.GetToken(authFile, 30*time.Second)
 	if err != nil {
-		t.Fatalf("second GetAccessToken() error = %v", err)
+		t.Fatalf("second GetToken() error = %v", err)
 	}
 	if token2 != "test-token" {
 		t.Fatalf("token = %q, want %q", token2, "test-token")
@@ -106,10 +101,10 @@ func TestGeminiCLIAuth_ProjectIDRetryAfterFailure(t *testing.T) {
 		t.Fatalf("discovery calls = %d, want 2", c)
 	}
 
-	// Third call: should hit the read-lock fast path (cached), no more discovery calls
-	_, stor3, err := ga.GetAccessToken()
+	// Third call: should hit cache, no more discovery calls
+	_, stor3, err := geminiCLIAuthManager.GetToken(authFile, 30*time.Second)
 	if err != nil {
-		t.Fatalf("third GetAccessToken() error = %v", err)
+		t.Fatalf("third GetToken() error = %v", err)
 	}
 	if stor3.ProjectID != "project-123" {
 		t.Fatalf("third call: ProjectID = %q, want %q", stor3.ProjectID, "project-123")
