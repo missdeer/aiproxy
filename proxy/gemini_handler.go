@@ -257,178 +257,70 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 	apiType := upstream.GetAPIType()
 	defaultMaxTokens := h.defaultMaxTokens()
 
-	var url string
-	var modifiedBody []byte
-	var err error
-
-	switch apiType {
-	case config.APITypeCodex:
-		// Convert Gemini to Responses format, then forward to Codex
-		responsesBody := convertGeminiToResponsesRequest(bodyMap)
-		responsesBody["model"] = model
-		if isStream {
-			responsesBody["stream"] = true
-		}
-		modifiedBody, err = json.Marshal(responsesBody)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		// ForwardToCodex returns Responses-format data. Convert to Gemini format.
-		status, respBody, respHeaders, err := ForwardToCodex(h.client, upstream, modifiedBody, isStream)
-		if err != nil {
-			return status, nil, nil, err
-		}
-		if status >= 400 {
-			return status, respBody, respHeaders, nil
-		}
-		if isStream {
-			// Convert Codex SSE (Responses-format) to Gemini streaming format
-			geminiResp, err := h.convertStreamToGemini(bytes.NewReader(respBody), config.APITypeResponses)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("failed to convert codex stream to gemini: %w", err)
-			}
-			respHeaders.Set("Content-Type", "application/json")
-			return status, geminiResp, respHeaders, nil
-		}
-		// Non-stream: convert Responses JSON to Gemini format
-		geminiResp, err := convertToGeminiResponse(respBody, config.APITypeResponses)
-		if err != nil {
-			return 0, nil, nil, fmt.Errorf("failed to convert codex response to gemini: %w", err)
-		}
-		respHeaders.Set("Content-Type", "application/json")
-		return status, geminiResp, respHeaders, nil
-
-	case config.APITypeGemini:
-		// Native Gemini upstream
+	// Native Gemini - direct passthrough without format conversion
+	if apiType == config.APITypeGemini {
 		action := "generateContent"
 		if isStream {
 			action = "streamGenerateContent"
 		}
-		url = fmt.Sprintf("%s/v1beta/models/%s:%s", strings.TrimSuffix(upstream.BaseURL, "/"), model, action)
-		// Pass through query parameters when API types match (excluding key parameter which is handled separately)
+		url := fmt.Sprintf("%s/v1beta/models/%s:%s", strings.TrimSuffix(upstream.BaseURL, "/"), model, action)
+		rawQuery := ""
 		if originalReq.URL.RawQuery != "" {
-			url = url + "?" + originalReq.URL.RawQuery
+			rawQuery = originalReq.URL.RawQuery
 		}
-		modifiedBody = originalBody
 
-	case config.APITypeAnthropic:
-		// Convert to Anthropic format
-		bodyMap = convertGeminiToAnthropicRequest(bodyMap, defaultMaxTokens)
-		bodyMap["model"] = model
-		if isStream {
-			bodyMap["stream"] = true
-		}
-		modifiedBody, err = json.Marshal(bodyMap)
+		status, respBody, headers, err := doHTTPRequest(h.client, url, originalBody, upstream, config.APITypeGemini, originalReq, rawQuery)
 		if err != nil {
 			return 0, nil, nil, err
 		}
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
-
-	case config.APITypeOpenAI:
-		// Convert to OpenAI format
-		bodyMap = convertGeminiToOpenAIRequest(bodyMap)
-		bodyMap["model"] = model
-		if isStream {
-			bodyMap["stream"] = true
-		}
-		modifiedBody, err = json.Marshal(bodyMap)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
-
-	case config.APITypeResponses:
-		// Convert to Responses format
-		bodyMap = convertGeminiToResponsesRequest(bodyMap)
-		bodyMap["model"] = model
-		if isStream {
-			bodyMap["stream"] = true
-		}
-		modifiedBody, err = json.Marshal(bodyMap)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
-
-	default:
-		return 0, nil, nil, fmt.Errorf("unsupported API type: %s", apiType)
+		return status, respBody, headers, nil
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(modifiedBody))
+	// Convert Gemini request to canonical (Responses) format
+	canonicalBody := convertGeminiToResponsesRequest(bodyMap)
+	canonicalBody["model"] = model
+	if isStream {
+		canonicalBody["stream"] = true
+	}
+	// Pass through defaultMaxTokens if needed
+	if _, hasMaxTokens := canonicalBody["max_output_tokens"]; !hasMaxTokens {
+		canonicalBody["max_output_tokens"] = defaultMaxTokens
+	}
+	canonicalBytes, err := json.Marshal(canonicalBody)
 	if err != nil {
 		return 0, nil, nil, err
 	}
 
-	// Copy headers
-	for k, vv := range originalReq.Header {
-		for _, v := range vv {
-			req.Header.Add(k, v)
-		}
-	}
-	stripHopByHopHeaders(req.Header)
-
-	// Set authentication
-	switch apiType {
-	case config.APITypeGemini:
-		// Gemini uses API key in URL or header
-		if !strings.Contains(url, "key=") {
-			url = url + "?key=" + upstream.Token
-			req.URL, _ = req.URL.Parse(url)
-		}
-		req.Header.Del("Authorization")
-		req.Header.Del("x-api-key")
-	case config.APITypeAnthropic:
-		req.Header.Set("x-api-key", upstream.Token)
-		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Del("Authorization")
-	case config.APITypeOpenAI, config.APITypeResponses:
-		req.Header.Set("Authorization", "Bearer "+upstream.Token)
-		req.Header.Del("x-api-key")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Del("Content-Length")
-
-	resp, err := h.client.Do(req)
+	// Send via OutboundSender
+	sender := GetOutboundSender(apiType)
+	status, respBody, respHeaders, respFormat, err := sender.Send(h.client, upstream, canonicalBytes, isStream, originalReq)
 	if err != nil {
-		return 0, nil, nil, err
+		return status, nil, nil, err
 	}
-	defer resp.Body.Close()
 
-	// Handle response conversion
-	if resp.StatusCode < 400 && apiType != config.APITypeGemini {
-		if isStream {
-			geminiResp, err := h.convertStreamToGemini(resp.Body, apiType)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("failed to convert stream: %w", err)
-			}
-			headers := resp.Header.Clone()
-			stripHopByHopHeaders(headers)
-			headers.Del("Content-Length")
-			headers.Set("Content-Type", "application/json")
-			return resp.StatusCode, geminiResp, headers, nil
-		} else {
-			respBody, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return 0, nil, nil, err
-			}
-			geminiResp, err := convertToGeminiResponse(respBody, apiType)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("failed to convert response: %w", err)
-			}
-			headers := resp.Header.Clone()
-			stripHopByHopHeaders(headers)
-			headers.Del("Content-Length")
-			headers.Set("Content-Type", "application/json")
-			return resp.StatusCode, geminiResp, headers, nil
+	// Error responses pass through without conversion
+	if status >= 400 {
+		return status, respBody, respHeaders, nil
+	}
+
+	// Convert response back to Gemini format
+	if isStream {
+		geminiResp, err := h.convertStreamToGemini(bytes.NewReader(respBody), respFormat)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
 		}
+		respHeaders.Del("Content-Length")
+		respHeaders.Set("Content-Type", "application/json")
+		return status, geminiResp, respHeaders, nil
 	}
 
-	respBody, err := io.ReadAll(resp.Body)
+	geminiResp, err := convertToGeminiResponse(respBody, respFormat)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, fmt.Errorf("failed to convert response: %w", err)
 	}
-
-	return resp.StatusCode, respBody, resp.Header, nil
+	respHeaders.Del("Content-Length")
+	respHeaders.Set("Content-Type", "application/json")
+	return status, geminiResp, respHeaders, nil
 }
 
 func (h *GeminiHandler) streamResponse(w http.ResponseWriter, body []byte) {

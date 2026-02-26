@@ -1,14 +1,12 @@
 package proxy
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -221,277 +219,68 @@ func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string
 
 	bodyMap["model"] = model
 
-	// Check if we need to force streaming for this upstream
-	forceStream := upstream.MustStream && !clientWantsStream
-	if forceStream {
-		bodyMap["stream"] = true
-		log.Printf("[INFO] Forcing stream=true for upstream %s (mustStream enabled)", upstream.Name)
-	}
-
 	apiType := upstream.GetAPIType()
-	var url string
-	var modifiedBody []byte
-	var err error
 
-	// Convert Anthropic request to target API format
-	switch apiType {
-	case config.APITypeCodex:
-		// Convert Anthropic to Responses format, then forward to Codex
-		responsesBody := convertAnthropicToResponsesRequest(bodyMap)
-		modifiedBody, err = json.Marshal(responsesBody)
+	// Native Anthropic - direct passthrough without format conversion
+	if apiType == config.APITypeAnthropic {
+		modifiedBody, err := json.Marshal(bodyMap)
 		if err != nil {
 			return 0, nil, nil, err
 		}
-		// ForwardToCodex returns Responses-format data. Convert to Anthropic format.
-		status, respBody, respHeaders, err := ForwardToCodex(h.client, upstream, modifiedBody, clientWantsStream)
-		if err != nil {
-			return status, nil, nil, err
-		}
-		if status >= 400 {
-			return status, respBody, respHeaders, nil
-		}
-		if clientWantsStream {
-			// Convert Codex SSE (Responses-format) to Anthropic streaming format
-			anthropicResp, err := h.convertStreamToAnthropic(bytes.NewReader(respBody), config.APITypeResponses, false)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("failed to convert codex stream to anthropic: %w", err)
-			}
-			respHeaders.Set("Content-Type", "text/event-stream")
-			return status, anthropicResp, respHeaders, nil
-		}
-		// Non-stream: convert Responses JSON to Anthropic format
-		anthropicResp, err := convertResponseToAnthropic(respBody, config.APITypeResponses)
-		if err != nil {
-			return 0, nil, nil, fmt.Errorf("failed to convert codex response to anthropic: %w", err)
-		}
-		respHeaders.Set("Content-Type", "application/json")
-		return status, anthropicResp, respHeaders, nil
-
-	case config.APITypeGeminiCLI:
-		// Convert Anthropic to Responses format, then forward to Gemini CLI
-		responsesBody := convertAnthropicToResponsesRequest(bodyMap)
-		modifiedBody, err = json.Marshal(responsesBody)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		// ForwardToGeminiCLI returns Responses-format data. Convert to Anthropic format.
-		status, respBody, respHeaders, err := ForwardToGeminiCLI(h.client, upstream, modifiedBody, clientWantsStream)
-		if err != nil {
-			return status, nil, nil, err
-		}
-		if status >= 400 {
-			return status, respBody, respHeaders, nil
-		}
-		if clientWantsStream {
-			// Convert Gemini CLI SSE (native Google format) to Anthropic streaming format
-			anthropicResp, err := h.convertStreamToAnthropic(bytes.NewReader(respBody), config.APITypeGemini, false)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("failed to convert geminicli stream to anthropic: %w", err)
-			}
-			respHeaders.Set("Content-Type", "text/event-stream")
-			return status, anthropicResp, respHeaders, nil
-		}
-		// Non-stream: convert Responses JSON to Anthropic format
-		anthropicResp, err := convertResponseToAnthropic(respBody, config.APITypeResponses)
-		if err != nil {
-			return 0, nil, nil, fmt.Errorf("failed to convert geminicli response to anthropic: %w", err)
-		}
-		respHeaders.Set("Content-Type", "application/json")
-		return status, anthropicResp, respHeaders, nil
-
-	case config.APITypeAntigravity:
-		// Convert Anthropic to Responses format, then forward to Antigravity
-		responsesBody := convertAnthropicToResponsesRequest(bodyMap)
-		modifiedBody, err = json.Marshal(responsesBody)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		// ForwardToAntigravity returns Responses-format data. Convert to Anthropic format.
-		status, respBody, respHeaders, err := ForwardToAntigravity(h.client, upstream, modifiedBody, clientWantsStream)
-		if err != nil {
-			return status, nil, nil, err
-		}
-		if status >= 400 {
-			return status, respBody, respHeaders, nil
-		}
-		if clientWantsStream {
-			// Convert Antigravity SSE (native Google format) to Anthropic streaming format
-			anthropicResp, err := h.convertStreamToAnthropic(bytes.NewReader(respBody), config.APITypeGemini, false)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("failed to convert antigravity stream to anthropic: %w", err)
-			}
-			respHeaders.Set("Content-Type", "text/event-stream")
-			return status, anthropicResp, respHeaders, nil
-		}
-		// Non-stream: convert Responses JSON to Anthropic format
-		anthropicResp, err := convertResponseToAnthropic(respBody, config.APITypeResponses)
-		if err != nil {
-			return 0, nil, nil, fmt.Errorf("failed to convert antigravity response to anthropic: %w", err)
-		}
-		respHeaders.Set("Content-Type", "application/json")
-		return status, anthropicResp, respHeaders, nil
-
-	case config.APITypeClaudeCode:
-		// Forward to Claude Code (native Anthropic format)
-		modifiedBody, err = json.Marshal(bodyMap)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		// ForwardToClaudeCode returns Anthropic-format data directly
-		status, respBody, respHeaders, err := ForwardToClaudeCode(h.client, upstream, modifiedBody, clientWantsStream)
-		if err != nil {
-			return status, nil, nil, err
-		}
-		return status, respBody, respHeaders, nil
-
-	case config.APITypeAnthropic:
-		// Native Anthropic - no conversion needed
-		modifiedBody, err = json.Marshal(bodyMap)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
-		// Pass through query parameters when API types match
+		url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
 		if originalReq.URL.RawQuery != "" {
 			url = url + "?" + originalReq.URL.RawQuery
 		}
 
-	case config.APITypeOpenAI:
-		// Convert Anthropic to OpenAI format
-		openAIBody := convertAnthropicToOpenAIRequest(bodyMap)
-		modifiedBody, err = json.Marshal(openAIBody)
+		status, respBody, headers, err := doHTTPRequest(h.client, url, modifiedBody, upstream, config.APITypeAnthropic, originalReq, "")
 		if err != nil {
 			return 0, nil, nil, err
 		}
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
-
-	case config.APITypeResponses:
-		// Convert Anthropic to Responses format
-		responsesBody := convertAnthropicToResponsesRequest(bodyMap)
-		modifiedBody, err = json.Marshal(responsesBody)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
-
-	case config.APITypeGemini:
-		// Convert Anthropic to Gemini format
-		geminiBody := convertAnthropicToGeminiRequest(bodyMap)
-		modifiedBody, err = json.Marshal(geminiBody)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		action := "generateContent"
-		if clientWantsStream || forceStream {
-			action = "streamGenerateContent"
-		}
-		url = fmt.Sprintf("%s/v1beta/models/%s:%s", strings.TrimSuffix(upstream.BaseURL, "/"), model, action)
-
-	default:
-		modifiedBody, err = json.Marshal(bodyMap)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
+		return status, respBody, headers, nil
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(modifiedBody))
+	// Convert Anthropic request to canonical (Responses) format
+	canonicalBody := convertAnthropicToResponsesRequest(bodyMap)
+	canonicalBody["model"] = model
+	if clientWantsStream {
+		canonicalBody["stream"] = true
+	}
+	canonicalBytes, err := json.Marshal(canonicalBody)
 	if err != nil {
 		return 0, nil, nil, err
 	}
 
-	// Copy all headers from original request
-	for k, vv := range originalReq.Header {
-		for _, v := range vv {
-			req.Header.Add(k, v)
-		}
-	}
-
-	// Remove hop-by-hop headers that should not be forwarded
-	stripHopByHopHeaders(req.Header)
-
-	// Set authentication based on API type
-	switch apiType {
-	case config.APITypeAnthropic:
-		req.Header.Set("x-api-key", upstream.Token)
-		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Del("Authorization")
-	case config.APITypeOpenAI, config.APITypeResponses:
-		req.Header.Set("Authorization", "Bearer "+upstream.Token)
-		req.Header.Del("x-api-key")
-	case config.APITypeGemini:
-		if !strings.Contains(url, "key=") {
-			url = url + "?key=" + upstream.Token
-			req.URL, _ = req.URL.Parse(url)
-		}
-		req.Header.Del("Authorization")
-		req.Header.Del("x-api-key")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Del("Content-Length") // Will be set automatically by http.Client
-
-	resp, err := h.client.Do(req)
+	// Send via OutboundSender
+	sender := GetOutboundSender(apiType)
+	status, respBody, respHeaders, respFormat, err := sender.Send(h.client, upstream, canonicalBytes, clientWantsStream, originalReq)
 	if err != nil {
-		return 0, nil, nil, err
-	}
-	defer resp.Body.Close()
-
-	// Handle response conversion back to Anthropic format
-	if resp.StatusCode < 400 && apiType != config.APITypeAnthropic {
-		if clientWantsStream || forceStream {
-			// Convert streaming response to Anthropic format
-			anthropicResp, err := h.convertStreamToAnthropic(resp.Body, apiType, !clientWantsStream)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
-			}
-			headers := resp.Header.Clone()
-			stripHopByHopHeaders(headers)
-			headers.Del("Content-Length")
-			headers.Del("Content-Encoding")
-			if clientWantsStream {
-				headers.Set("Content-Type", "text/event-stream")
-			} else {
-				headers.Set("Content-Type", "application/json")
-			}
-			return resp.StatusCode, anthropicResp, headers, nil
-		} else {
-			// Convert non-streaming response to Anthropic format
-			respBody, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return 0, nil, nil, err
-			}
-			anthropicResp, err := convertResponseToAnthropic(respBody, apiType)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("failed to convert response: %w", err)
-			}
-			headers := resp.Header.Clone()
-			stripHopByHopHeaders(headers)
-			headers.Del("Content-Length")
-			headers.Set("Content-Type", "application/json")
-			return resp.StatusCode, anthropicResp, headers, nil
-		}
+		return status, nil, nil, err
 	}
 
-	// If we forced streaming for Anthropic upstream, convert back to non-streaming
-	if forceStream && resp.StatusCode < 400 && apiType == config.APITypeAnthropic {
-		nonStreamResp, err := h.convertStreamToNonStream(resp.Body)
+	// Error responses pass through without conversion
+	if status >= 400 {
+		return status, respBody, respHeaders, nil
+	}
+
+	// Convert response back to Anthropic format
+	if clientWantsStream {
+		anthropicResp, err := h.convertStreamToAnthropic(bytes.NewReader(respBody), respFormat, false)
 		if err != nil {
 			return 0, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
 		}
-		headers := resp.Header.Clone()
-		stripHopByHopHeaders(headers)
-		headers.Del("Content-Length")
-		headers.Del("Content-Encoding")
-		headers.Set("Content-Type", "application/json")
-		return resp.StatusCode, nonStreamResp, headers, nil
+		respHeaders.Del("Content-Length")
+		respHeaders.Del("Content-Encoding")
+		respHeaders.Set("Content-Type", "text/event-stream")
+		return status, anthropicResp, respHeaders, nil
 	}
 
-	respBody, err := io.ReadAll(resp.Body)
+	anthropicResp, err := convertResponseToAnthropic(respBody, respFormat)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, fmt.Errorf("failed to convert response: %w", err)
 	}
-
-	return resp.StatusCode, respBody, resp.Header, nil
+	respHeaders.Del("Content-Length")
+	respHeaders.Set("Content-Type", "application/json")
+	return status, anthropicResp, respHeaders, nil
 }
 
 func (h *AnthropicHandler) streamResponse(w http.ResponseWriter, body []byte) {
@@ -528,202 +317,4 @@ func stripHopByHopHeaders(h http.Header) {
 	} {
 		h.Del(header)
 	}
-}
-
-// convertStreamToNonStream reads SSE stream events and converts them to a non-streaming response
-func (h *AnthropicHandler) convertStreamToNonStream(reader io.Reader) ([]byte, error) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-
-	var response struct {
-		ID           string `json:"id"`
-		Type         string `json:"type"`
-		Role         string `json:"role"`
-		Content      []any  `json:"content"`
-		Model        string `json:"model"`
-		StopReason   string `json:"stop_reason,omitempty"`
-		StopSequence string `json:"stop_sequence,omitempty"`
-		Usage        struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
-	}
-	response.Type = "message"
-	response.Role = "assistant"
-	response.Content = make([]any, 0)
-
-	// Track content blocks being built
-	contentBlocks := make(map[int]map[string]any)
-	var (
-		currentEventType string
-		dataBuilder      strings.Builder
-		sawMessageStop   bool
-	)
-
-	flushEvent := func() error {
-		if dataBuilder.Len() == 0 {
-			return nil
-		}
-		data := dataBuilder.String()
-		dataBuilder.Reset()
-
-		data = strings.TrimSpace(data)
-		if data == "" || data == "[DONE]" {
-			return nil
-		}
-
-		var event map[string]any
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return fmt.Errorf("invalid SSE JSON for event %q: %w (data=%s)", currentEventType, err, truncateString(data, 200))
-		}
-
-		eventType := currentEventType
-		if eventType == "" {
-			if t, ok := event["type"].(string); ok {
-				eventType = t
-			}
-		}
-
-		switch eventType {
-		case "message_start":
-			if msg, ok := event["message"].(map[string]any); ok {
-				if id, ok := msg["id"].(string); ok {
-					response.ID = id
-				}
-				if model, ok := msg["model"].(string); ok {
-					response.Model = model
-				}
-				if usage, ok := msg["usage"].(map[string]any); ok {
-					if input, ok := usage["input_tokens"].(float64); ok {
-						response.Usage.InputTokens = int(input)
-					}
-				}
-			}
-
-		case "content_block_start":
-			if index, ok := event["index"].(float64); ok {
-				idx := int(index)
-				if block, ok := event["content_block"].(map[string]any); ok {
-					contentBlocks[idx] = block
-				}
-			}
-
-		case "content_block_delta":
-			if index, ok := event["index"].(float64); ok {
-				idx := int(index)
-				if delta, ok := event["delta"].(map[string]any); ok {
-					if block, exists := contentBlocks[idx]; exists {
-						// Append text delta
-						if deltaType, ok := delta["type"].(string); ok && deltaType == "text_delta" {
-							if text, ok := delta["text"].(string); ok {
-								if existingText, ok := block["text"].(string); ok {
-									block["text"] = existingText + text
-								} else {
-									block["text"] = text
-								}
-							}
-						}
-						// Handle thinking delta
-						if deltaType, ok := delta["type"].(string); ok && deltaType == "thinking_delta" {
-							if thinking, ok := delta["thinking"].(string); ok {
-								if existingThinking, ok := block["thinking"].(string); ok {
-									block["thinking"] = existingThinking + thinking
-								} else {
-									block["thinking"] = thinking
-								}
-							}
-						}
-					}
-				}
-			}
-
-		case "message_delta":
-			if delta, ok := event["delta"].(map[string]any); ok {
-				if stopReason, ok := delta["stop_reason"].(string); ok {
-					response.StopReason = stopReason
-				}
-				if stopSeq, ok := delta["stop_sequence"].(string); ok {
-					response.StopSequence = stopSeq
-				}
-			}
-			if usage, ok := event["usage"].(map[string]any); ok {
-				if output, ok := usage["output_tokens"].(float64); ok {
-					response.Usage.OutputTokens = int(output)
-				}
-			}
-
-		case "message_stop":
-			sawMessageStop = true
-
-		case "error":
-			if errObj, ok := event["error"].(map[string]any); ok {
-				if msg, ok := errObj["message"].(string); ok && msg != "" {
-					return fmt.Errorf("upstream sent error event: %s", msg)
-				}
-				if typ, ok := errObj["type"].(string); ok && typ != "" {
-					return fmt.Errorf("upstream sent error event: %s", typ)
-				}
-			}
-			return fmt.Errorf("upstream sent error event: %s", truncateString(data, 200))
-		}
-
-		return nil
-	}
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// End of event.
-		if line == "" {
-			if err := flushEvent(); err != nil {
-				return nil, err
-			}
-			if sawMessageStop {
-				break
-			}
-			currentEventType = ""
-			continue
-		}
-
-		// Comment line.
-		if strings.HasPrefix(line, ":") {
-			continue
-		}
-
-		// Parse event type.
-		if strings.HasPrefix(line, "event:") {
-			currentEventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-			continue
-		}
-
-		// Parse data.
-		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimPrefix(line, "data:")
-			data = strings.TrimPrefix(data, " ")
-			if dataBuilder.Len() > 0 {
-				dataBuilder.WriteByte('\n')
-			}
-			dataBuilder.WriteString(data)
-			continue
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	if err := flushEvent(); err != nil {
-		return nil, err
-	}
-
-	// Build final content array from content blocks
-	indexes := make([]int, 0, len(contentBlocks))
-	for idx := range contentBlocks {
-		indexes = append(indexes, idx)
-	}
-	sort.Ints(indexes)
-	for _, idx := range indexes {
-		response.Content = append(response.Content, contentBlocks[idx])
-	}
-
-	return json.Marshal(response)
 }

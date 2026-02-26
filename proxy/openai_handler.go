@@ -219,205 +219,79 @@ func (h *OpenAIHandler) forwardRequest(upstream config.Upstream, model string, o
 
 	bodyMap["model"] = model
 
-	// Check if we need to force streaming for this upstream
-	forceStream := upstream.MustStream && !clientWantsStream
-	if forceStream {
-		bodyMap["stream"] = true
-		log.Printf("[INFO] Forcing stream=true for upstream %s (mustStream enabled)", upstream.Name)
-	}
-
 	apiType := upstream.GetAPIType()
-	var url string
-	var modifiedBody []byte
-	var err error
 
-	// Convert OpenAI request to target API format
-	switch apiType {
-	case config.APITypeCodex:
-		// Convert OpenAI chat to Responses format, then forward to Codex
-		responsesBody := convertOpenAIChatToResponsesRequest(bodyMap)
-		modifiedBody, err = json.Marshal(responsesBody)
+	// Native OpenAI - direct passthrough without format conversion
+	if apiType == config.APITypeOpenAI {
+		modifiedBody, err := json.Marshal(bodyMap)
 		if err != nil {
 			return 0, nil, nil, err
 		}
-		// ForwardToCodex returns Responses-format data (JSON if non-stream, SSE if stream).
-		// Convert it to OpenAI format before returning.
-		status, respBody, respHeaders, err := ForwardToCodex(h.client, upstream, modifiedBody, clientWantsStream)
-		if err != nil {
-			return status, nil, nil, err
-		}
-		if status >= 400 {
-			return status, respBody, respHeaders, nil
-		}
-		if clientWantsStream {
-			// Codex SSE uses Responses-format events; convert to OpenAI streaming chunks
-			openAIResp, err := h.convertStreamToOpenAI(bytes.NewReader(respBody), config.APITypeResponses, false)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("failed to convert codex stream to openai: %w", err)
-			}
-			respHeaders.Set("Content-Type", "text/event-stream")
-			return status, openAIResp, respHeaders, nil
-		}
-		// Non-stream: ForwardToCodex already assembled JSON in Responses format
-		openAIResp, err := convertResponsesToOpenAIChat(respBody)
-		if err != nil {
-			return 0, nil, nil, fmt.Errorf("failed to convert codex response to openai: %w", err)
-		}
-		respHeaders.Set("Content-Type", "application/json")
-		return status, openAIResp, respHeaders, nil
-
-	case config.APITypeOpenAI:
-		// Native OpenAI - no conversion needed
-		modifiedBody, err = json.Marshal(bodyMap)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
-		// Pass through query parameters when API types match
+		url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
 		if originalReq.URL.RawQuery != "" {
 			url = url + "?" + originalReq.URL.RawQuery
 		}
 
-	case config.APITypeResponses:
-		// Convert OpenAI chat to Responses format
-		responsesBody := convertOpenAIChatToResponsesRequest(bodyMap)
-		modifiedBody, err = json.Marshal(responsesBody)
+		status, respBody, headers, err := doHTTPRequest(h.client, url, modifiedBody, upstream, config.APITypeOpenAI, originalReq, "")
 		if err != nil {
 			return 0, nil, nil, err
 		}
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
-
-	case config.APITypeAnthropic:
-		// Convert OpenAI to Anthropic format
-		anthropicBody := convertOpenAIChatToAnthropicRequest(bodyMap)
-		modifiedBody, err = json.Marshal(anthropicBody)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
-
-	case config.APITypeGemini:
-		// Convert OpenAI to Gemini format
-		geminiBody := convertOpenAIChatToGeminiRequest(bodyMap)
-		modifiedBody, err = json.Marshal(geminiBody)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		action := "generateContent"
-		if clientWantsStream || forceStream {
-			action = "streamGenerateContent"
-		}
-		url = fmt.Sprintf("%s/v1beta/models/%s:%s", strings.TrimSuffix(upstream.BaseURL, "/"), model, action)
-
-	default:
-		modifiedBody, err = json.Marshal(bodyMap)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
+		return status, respBody, headers, nil
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(modifiedBody))
+	// Convert OpenAI Chat request to canonical (Responses) format
+	canonicalBody := convertOpenAIChatToResponsesRequest(bodyMap)
+	canonicalBody["model"] = model
+	if clientWantsStream {
+		canonicalBody["stream"] = true
+	}
+	canonicalBytes, err := json.Marshal(canonicalBody)
 	if err != nil {
 		return 0, nil, nil, err
 	}
 
-	// Copy headers from original request
-	for k, vv := range originalReq.Header {
-		for _, v := range vv {
-			req.Header.Add(k, v)
-		}
-	}
-
-	stripHopByHopHeaders(req.Header)
-
-	// Set authentication based on API type
-	switch apiType {
-	case config.APITypeAnthropic:
-		req.Header.Set("x-api-key", upstream.Token)
-		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Del("Authorization")
-	case config.APITypeOpenAI, config.APITypeResponses:
-		req.Header.Set("Authorization", "Bearer "+upstream.Token)
-		req.Header.Del("x-api-key")
-	case config.APITypeGemini:
-		if !strings.Contains(url, "key=") {
-			url = url + "?key=" + upstream.Token
-			req.URL, _ = req.URL.Parse(url)
-		}
-		req.Header.Del("Authorization")
-		req.Header.Del("x-api-key")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Del("Content-Length")
-
-	resp, err := h.client.Do(req)
+	// Send via OutboundSender
+	sender := GetOutboundSender(apiType)
+	status, respBody, respHeaders, respFormat, err := sender.Send(h.client, upstream, canonicalBytes, clientWantsStream, originalReq)
 	if err != nil {
-		return 0, nil, nil, err
-	}
-	defer resp.Body.Close()
-
-	// Handle response conversion back to OpenAI format
-	// APITypeOpenAI doesn't need conversion
-	// APITypeResponses needs conversion from Responses API format to OpenAI chat format
-	if resp.StatusCode < 400 && apiType != config.APITypeOpenAI {
-		if apiType == config.APITypeResponses {
-			// Convert Responses API response to OpenAI chat format
-			respBody, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return 0, nil, nil, err
-			}
-			openAIResp, err := convertResponsesToOpenAIChat(respBody)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("failed to convert responses to openai: %w", err)
-			}
-			headers := resp.Header.Clone()
-			stripHopByHopHeaders(headers)
-			headers.Del("Content-Length")
-			headers.Set("Content-Type", "application/json")
-			return resp.StatusCode, openAIResp, headers, nil
-		}
-		if clientWantsStream || forceStream {
-			// Convert streaming response to OpenAI format
-			openAIResp, err := h.convertStreamToOpenAI(resp.Body, apiType, !clientWantsStream)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
-			}
-			headers := resp.Header.Clone()
-			stripHopByHopHeaders(headers)
-			headers.Del("Content-Length")
-			headers.Del("Content-Encoding")
-			if clientWantsStream {
-				headers.Set("Content-Type", "text/event-stream")
-			} else {
-				headers.Set("Content-Type", "application/json")
-			}
-			return resp.StatusCode, openAIResp, headers, nil
-		} else {
-			// Convert non-streaming response to OpenAI format
-			respBody, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return 0, nil, nil, err
-			}
-			openAIResp, err := convertResponseToOpenAI(respBody, apiType)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("failed to convert response: %w", err)
-			}
-			headers := resp.Header.Clone()
-			stripHopByHopHeaders(headers)
-			headers.Del("Content-Length")
-			headers.Set("Content-Type", "application/json")
-			return resp.StatusCode, openAIResp, headers, nil
-		}
+		return status, nil, nil, err
 	}
 
-	// For native OpenAI upstream or error responses, pass through
-	respBody, err := io.ReadAll(resp.Body)
+	// Error responses pass through without conversion
+	if status >= 400 {
+		return status, respBody, respHeaders, nil
+	}
+
+	// Convert response back to OpenAI format
+	if clientWantsStream {
+		openAIResp, err := h.convertStreamToOpenAI(bytes.NewReader(respBody), respFormat, false)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
+		}
+		respHeaders.Del("Content-Length")
+		respHeaders.Del("Content-Encoding")
+		respHeaders.Set("Content-Type", "text/event-stream")
+		return status, openAIResp, respHeaders, nil
+	}
+
+	// Special case: Responses format uses a different conversion function
+	if respFormat == config.APITypeResponses {
+		openAIResp, err := convertResponsesToOpenAIChat(respBody)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("failed to convert response: %w", err)
+		}
+		respHeaders.Del("Content-Length")
+		respHeaders.Set("Content-Type", "application/json")
+		return status, openAIResp, respHeaders, nil
+	}
+
+	openAIResp, err := convertResponseToOpenAI(respBody, respFormat)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, fmt.Errorf("failed to convert response: %w", err)
 	}
-
-	return resp.StatusCode, respBody, resp.Header, nil
+	respHeaders.Del("Content-Length")
+	respHeaders.Set("Content-Type", "application/json")
+	return status, openAIResp, respHeaders, nil
 }
 
 // convertStreamToOpenAI converts Anthropic or Gemini streaming response to OpenAI format

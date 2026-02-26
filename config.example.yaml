@@ -33,9 +33,6 @@ upstreams:
     weight: 10
     api_type: "anthropic"
     enabled: false
-    # If this upstream only supports streaming responses, enable this to force stream=true upstream.
-    # The proxy will convert the SSE stream back into a single JSON response for non-stream clients.
-    must_stream: true
     # Heartbeat keepalive configuration (optional)
     # Sends a minimal request ("hi") to the upstream at regular intervals to keep the connection alive
     heartbeat: false          # Enable heartbeat (default: false)

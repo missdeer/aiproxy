@@ -35,7 +35,6 @@ type Upstream struct {
 	Weight            int          `yaml:"weight"`
 	ModelMappings     ModelMapping `yaml:"model_mappings"`
 	AvailableModels   []string     `yaml:"available_models"`
-	MustStream        bool         `yaml:"must_stream"`
 	APIType           APIType      `yaml:"api_type"`           // "anthropic", "openai", "gemini", "responses", or "codex"
 	AuthFiles         []string     `yaml:"auth_files"`         // Paths to auth JSON files (used by codex api_type, round-robin)
 	Heartbeat         bool         `yaml:"heartbeat"`          // Enable heartbeat keepalive (default: false)

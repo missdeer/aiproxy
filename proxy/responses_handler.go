@@ -235,149 +235,73 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 
 	bodyMap["model"] = model
 
-	// Check if we need to force streaming for this upstream
-	forceStream := upstream.MustStream && !clientWantsStream
-	if forceStream {
-		bodyMap["stream"] = true
-		log.Printf("[INFO] Forcing stream=true for upstream %s (mustStream enabled)", upstream.Name)
-	}
-
 	apiType := upstream.GetAPIType()
 
-	// Convert request format based on API type
-	var url string
-	switch apiType {
-	case config.APITypeCodex:
-		// Codex uses Responses API format natively - no conversion needed
-		// ForwardToCodex handles auth, headers, and request forwarding
+	// Native Responses API - direct passthrough without format conversion
+	if apiType == config.APITypeResponses {
 		modifiedBody, err := json.Marshal(bodyMap)
 		if err != nil {
 			return 0, nil, nil, err
 		}
-		return ForwardToCodex(h.client, upstream, modifiedBody, clientWantsStream)
-	case config.APITypeAnthropic:
-		bodyMap = convertResponsesToAnthropicRequest(bodyMap)
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
-	case config.APITypeGemini:
-		bodyMap = convertResponsesToGeminiRequest(bodyMap)
-		action := "generateContent"
-		if clientWantsStream || forceStream {
-			action = "streamGenerateContent"
-		}
-		url = fmt.Sprintf("%s/v1beta/models/%s:%s",
-			strings.TrimSuffix(upstream.BaseURL, "/"), model, action)
-	case config.APITypeOpenAI:
-		// Convert to chat/completions format
-		bodyMap = convertResponsesToChatRequest(bodyMap)
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
-	case config.APITypeResponses:
-		// Native Responses API - no conversion needed
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
-		// Pass through query parameters when API types match
+		url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
+		rawQuery := ""
 		if originalReq.URL.RawQuery != "" {
-			url = url + "?" + originalReq.URL.RawQuery
+			rawQuery = originalReq.URL.RawQuery
 		}
-	default:
-		bodyMap = convertResponsesToAnthropicRequest(bodyMap)
-		url = strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
+
+		status, respBody, headers, err := doHTTPRequest(h.client, url, modifiedBody, upstream, config.APITypeResponses, originalReq, rawQuery)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		return status, respBody, headers, nil
 	}
 
-	modifiedBody, err := json.Marshal(bodyMap)
+	// For Responses inbound, the body is already in canonical (Responses) format
+	canonicalBytes, err := json.Marshal(bodyMap)
 	if err != nil {
 		return 0, nil, nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(modifiedBody))
+	// Send via OutboundSender
+	sender := GetOutboundSender(apiType)
+	status, respBody, respHeaders, respFormat, err := sender.Send(h.client, upstream, canonicalBytes, clientWantsStream, originalReq)
 	if err != nil {
-		return 0, nil, nil, err
+		return status, nil, nil, err
 	}
 
-	// Copy headers from original request
-	for k, vv := range originalReq.Header {
-		for _, v := range vv {
-			req.Header.Add(k, v)
+	// Error responses pass through without conversion
+	if status >= 400 {
+		return status, respBody, respHeaders, nil
+	}
+
+	// If response is already in Responses format, no conversion needed
+	if respFormat == config.APITypeResponses {
+		if clientWantsStream {
+			// Already in Responses SSE format, pass through
+			return status, respBody, respHeaders, nil
 		}
+		return status, respBody, respHeaders, nil
 	}
 
-	stripHopByHopHeaders(req.Header)
-
-	// Set authentication based on API type
-	switch apiType {
-	case config.APITypeAnthropic:
-		req.Header.Set("x-api-key", upstream.Token)
-		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Del("Authorization")
-	case config.APITypeGemini:
-		if !strings.Contains(url, "key=") {
-			url = url + "?key=" + upstream.Token
-			req.URL, _ = req.URL.Parse(url)
+	// Convert response back to Responses format
+	if clientWantsStream {
+		responsesResp, err := h.convertStreamToResponses(bytes.NewReader(respBody), true, respFormat)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
 		}
-		req.Header.Del("Authorization")
-		req.Header.Del("x-api-key")
-	case config.APITypeOpenAI, config.APITypeResponses:
-		req.Header.Set("Authorization", "Bearer "+upstream.Token)
-		req.Header.Del("x-api-key")
-	default:
-		req.Header.Set("Authorization", "Bearer "+upstream.Token)
-		req.Header.Del("x-api-key")
+		respHeaders.Del("Content-Length")
+		respHeaders.Del("Content-Encoding")
+		respHeaders.Set("Content-Type", "text/event-stream")
+		return status, responsesResp, respHeaders, nil
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Del("Content-Length")
 
-	resp, err := h.client.Do(req)
+	responsesResp, err := convertToResponsesFormat(respBody, respFormat)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, fmt.Errorf("failed to convert response: %w", err)
 	}
-	defer resp.Body.Close()
-
-	// Handle response conversion
-	if resp.StatusCode < 400 {
-		// APITypeResponses doesn't need conversion - it's native Responses API
-		needsConversion := apiType != config.APITypeResponses
-
-		if needsConversion {
-			if forceStream || (bodyMap["stream"] == true) {
-				// Handle streaming response
-				responsesResp, err := h.convertStreamToResponses(resp.Body, clientWantsStream, apiType)
-				if err != nil {
-					return 0, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
-				}
-				headers := resp.Header.Clone()
-				stripHopByHopHeaders(headers)
-				headers.Del("Content-Length")
-				headers.Del("Content-Encoding")
-				if clientWantsStream {
-					headers.Set("Content-Type", "text/event-stream")
-				} else {
-					headers.Set("Content-Type", "application/json")
-				}
-				return resp.StatusCode, responsesResp, headers, nil
-			} else {
-				// Handle non-streaming response
-				respBody, err := io.ReadAll(resp.Body)
-				if err != nil {
-					return 0, nil, nil, err
-				}
-				responsesResp, err := convertToResponsesFormat(respBody, apiType)
-				if err != nil {
-					return 0, nil, nil, fmt.Errorf("failed to convert response: %w", err)
-				}
-				headers := resp.Header.Clone()
-				stripHopByHopHeaders(headers)
-				headers.Del("Content-Length")
-				headers.Set("Content-Type", "application/json")
-				return resp.StatusCode, responsesResp, headers, nil
-			}
-		}
-	}
-
-	// For native Responses API upstream or error responses, pass through
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-
-	return resp.StatusCode, respBody, resp.Header, nil
+	respHeaders.Del("Content-Length")
+	respHeaders.Set("Content-Type", "application/json")
+	return status, responsesResp, respHeaders, nil
 }
 
 func (h *ResponsesHandler) streamResponse(w http.ResponseWriter, body []byte) {
