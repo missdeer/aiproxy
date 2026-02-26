@@ -27,7 +27,7 @@ func NewAnthropicHandler(cfg *config.Config) *AnthropicHandler {
 	return &AnthropicHandler{
 		cfg:      cfg,
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
-		client:   &http.Client{Timeout: timeout},
+		client:   newHTTPClient(timeout),
 	}
 }
 

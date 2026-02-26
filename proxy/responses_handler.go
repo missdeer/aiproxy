@@ -30,7 +30,7 @@ func NewResponsesHandler(cfg *config.Config) *ResponsesHandler {
 	return &ResponsesHandler{
 		cfg:      cfg,
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
-		client:   &http.Client{Timeout: timeout},
+		client:   newHTTPClient(timeout),
 	}
 }
 

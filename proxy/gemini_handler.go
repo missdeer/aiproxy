@@ -30,7 +30,7 @@ func NewGeminiHandler(cfg *config.Config) *GeminiHandler {
 	return &GeminiHandler{
 		cfg:      cfg,
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
-		client:   &http.Client{Timeout: timeout},
+		client:   newHTTPClient(timeout),
 	}
 }
 

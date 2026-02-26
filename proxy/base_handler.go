@@ -24,8 +24,26 @@ func NewBaseHandler(cfg *config.Config) BaseHandler {
 	return BaseHandler{
 		Cfg:      cfg,
 		Balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
-		Client:   &http.Client{Timeout: timeout},
+		Client:   newHTTPClient(timeout),
 	}
+}
+
+// newHTTPClient creates an http.Client that clones http.DefaultTransport and
+// sets ResponseHeaderTimeout. This preserves env-proxy, HTTP/2, dial/TLS
+// handshake defaults, and idle connection tuning from DefaultTransport.
+func newHTTPClient(responseHeaderTimeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
+	return &http.Client{Transport: transport}
+}
+
+// ClientResponseHeaderTimeout extracts the ResponseHeaderTimeout from a client's transport.
+// Falls back to 60s if not set.
+func ClientResponseHeaderTimeout(client *http.Client) time.Duration {
+	if t, ok := client.Transport.(*http.Transport); ok && t.ResponseHeaderTimeout > 0 {
+		return t.ResponseHeaderTimeout
+	}
+	return 60 * time.Second
 }
 
 // UpdateConfig updates the handler's configuration

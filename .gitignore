@@ -51,3 +51,4 @@ codex-*.json
 geminicli-*.json
 antigravity-*.json
 claudecode-*.json
+.ace-tool/

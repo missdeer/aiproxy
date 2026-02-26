@@ -30,7 +30,7 @@ func NewOpenAIHandler(cfg *config.Config) *OpenAIHandler {
 	return &OpenAIHandler{
 		cfg:      cfg,
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
-		client:   &http.Client{Timeout: timeout},
+		client:   newHTTPClient(timeout),
 	}
 }
 

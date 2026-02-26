@@ -37,8 +37,6 @@ type Upstream struct {
 	AvailableModels   []string     `yaml:"available_models"`
 	APIType           APIType      `yaml:"api_type"`           // "anthropic", "openai", "gemini", "responses", or "codex"
 	AuthFiles         []string     `yaml:"auth_files"`         // Paths to auth JSON files (used by codex api_type, round-robin)
-	Heartbeat         bool         `yaml:"heartbeat"`          // Enable heartbeat keepalive (default: false)
-	HeartbeatInterval int          `yaml:"heartbeat_interval"` // Heartbeat interval in seconds (default: 0, disabled)
 }
 
 // IsEnabled returns whether this upstream is enabled (defaults to true)
@@ -160,14 +158,6 @@ func Load(path string) (*Config, error) {
 	for i := range cfg.Upstreams {
 		if cfg.Upstreams[i].Weight <= 0 {
 			cfg.Upstreams[i].Weight = 1
-		}
-		// Set heartbeat defaults
-		if cfg.Upstreams[i].HeartbeatInterval < 0 {
-			cfg.Upstreams[i].HeartbeatInterval = 0
-		}
-		// If heartbeat is enabled but interval is 0, disable heartbeat
-		if cfg.Upstreams[i].Heartbeat && cfg.Upstreams[i].HeartbeatInterval == 0 {
-			cfg.Upstreams[i].Heartbeat = false
 		}
 		// Deduplicate AuthFiles using normalized absolute paths.
 		// Relative paths are resolved against the process CWD (not the config file location).

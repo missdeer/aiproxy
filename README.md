@@ -2,7 +2,7 @@
 
 API proxy for AI services with intelligent load balancing, automatic failover, and multi-protocol translation.
 
-Accepts requests in **Anthropic**, **OpenAI**, or **Responses API** format, and routes them to any supported upstream — translating between protocols automatically.
+Accepts requests in **Anthropic**, **OpenAI**, **Responses API**, or **Gemini** format, and routes them to any supported upstream — translating between protocols automatically.
 
 ## Features
 
@@ -11,12 +11,13 @@ Accepts requests in **Anthropic**, **OpenAI**, or **Responses API** format, and 
 - **Weighted Round-Robin Load Balancing** — Distribute requests across multiple upstream services based on configured weights
 - **Per-Upstream Model Mapping** — Each upstream can map client model names to its own model names
 - **Model Filtering** — Only route requests to upstreams that support the requested model
-- **Circuit Breaker** — Automatically mark failing upstreams as unavailable (3 consecutive failures), with auto-recovery after 30 minutes
+- **Circuit Breaker** — Automatically mark failing upstreams as unavailable (3 consecutive failures per model), with auto-recovery after 30 minutes
 - **Automatic Failover** — Seamlessly retry failed requests on alternative upstreams
 - **OAuth Authentication** — Support for OAuth-based upstreams (Codex, Gemini CLI, Antigravity, Claude Code) with automatic token refresh
 - **Auth File Round-Robin** — Multiple auth files per upstream, rotated in round-robin fashion
 - **Streaming Support** — Full support for streaming responses across all protocols
 - **Upstream Must-Stream Fallback** — Force streaming-only upstreams while keeping non-stream client compatibility
+- **Config Hot-Reload** — Config file changes are watched and applied without restart
 - **Rotating File Logging** — Optional file-based logging with automatic rotation by size/age
 
 ## Supported API Types
@@ -47,6 +48,7 @@ Create a `config.yaml` file (see `config.example.yaml` for reference):
 bind: "127.0.0.1"
 listen: ":8080"
 default_max_tokens: 4096
+upstream_request_timeout: 60  # seconds to wait for upstream response headers (default: 60)
 
 # Rotating file log (optional, omit for stdout)
 log:
@@ -64,7 +66,6 @@ upstreams:
     token: "sk-ant-xxx"
     weight: 10
     api_type: "anthropic"
-    must_stream: false
     model_mappings:
       "claude-3-opus": "claude-3-opus-20240229"
       "claude-3-sonnet": "claude-3-sonnet-20240229"
@@ -126,7 +127,7 @@ curl http://localhost:8080/v1beta/models/gemini-pro:generateContent \
 
 ## How It Works
 
-1. **Request Reception** — Client sends request in any supported format (Anthropic / OpenAI / Responses)
+1. **Request Reception** — Client sends request in any supported format (Anthropic / OpenAI / Responses / Gemini)
 2. **Model Filtering** — Proxy filters upstreams that support the requested model
 3. **Load Balancing** — Weighted round-robin selects the next upstream
 4. **Protocol Translation** — Request is converted from the client's format to the upstream's native format
@@ -135,7 +136,7 @@ curl http://localhost:8080/v1beta/models/gemini-pro:generateContent \
 7. **Request Forwarding** — Request is sent to the selected upstream
 8. **Response Translation** — Upstream response is converted back to the client's expected format
 9. **Automatic Retry** — On 4xx/5xx errors, automatically tries the next upstream
-10. **Circuit Breaking** — After 3 consecutive failures, upstream is marked unavailable for 30 minutes
+10. **Circuit Breaking** — After 3 consecutive failures per model, upstream is marked unavailable for 30 minutes
 
 ## License
 

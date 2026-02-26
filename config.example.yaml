@@ -33,10 +33,6 @@ upstreams:
     weight: 10
     api_type: "anthropic"
     enabled: false
-    # Heartbeat keepalive configuration (optional)
-    # Sends a minimal request ("hi") to the upstream at regular intervals to keep the connection alive
-    heartbeat: false          # Enable heartbeat (default: false)
-    heartbeat_interval: 300   # Heartbeat interval in seconds (default: 0, disabled). Recommended: 300 (5 minutes)
     # Model name mappings for this upstream
     # Key: client model name, Value: upstream model name
     model_mappings:

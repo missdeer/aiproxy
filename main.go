@@ -7,10 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/missdeer/aiproxy/config"
-	"github.com/missdeer/aiproxy/heartbeat"
 	"github.com/missdeer/aiproxy/proxy"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
@@ -43,16 +41,6 @@ func main() {
 		log.Printf("  - %s (weight: %d)", u.Name, u.Weight)
 	}
 
-	// Create HTTP client for heartbeat
-	heartbeatClient := &http.Client{
-		Timeout: time.Duration(cfg.UpstreamRequestTimeout) * time.Second,
-	}
-
-	// Create and start heartbeat manager
-	hbManager := heartbeat.NewManager(heartbeatClient, cfg.Upstreams)
-	hbManager.Start()
-	defer hbManager.Stop()
-
 	// Create handlers
 	anthropicHandler := proxy.NewAnthropicHandler(cfg)
 	openaiHandler := proxy.NewOpenAIHandler(cfg)
@@ -65,7 +53,6 @@ func main() {
 		openaiHandler.UpdateConfig(newCfg)
 		responsesHandler.UpdateConfig(newCfg)
 		geminiHandler.UpdateConfig(newCfg)
-		hbManager.Update(newCfg.Upstreams)
 	})
 
 	// Start watching config file for changes
@@ -87,7 +74,6 @@ func main() {
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		log.Println("Shutting down...")
-		hbManager.Stop()
 		cfgManager.StopWatching()
 		os.Exit(0)
 	}()

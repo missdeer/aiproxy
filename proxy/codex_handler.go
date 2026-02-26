@@ -121,10 +121,7 @@ func codexRefreshAndUpdate(client *http.Client, storage *CodexTokenStorage, auth
 // the SSE output is reassembled into a single Responses-format JSON response.
 func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
 	// Get timeout from client
-	timeout := 60 * time.Second
-	if client.Timeout > 0 {
-		timeout = client.Timeout
-	}
+	timeout := ClientResponseHeaderTimeout(client)
 
 	// Get a valid access token (auto-refreshes if needed, skips disabled files)
 	accessToken, storage, err := codexAuthManager.GetTokenWithRetry(
