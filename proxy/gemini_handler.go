@@ -225,7 +225,7 @@ func (h *GeminiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[FAILED] All %d upstreams failed for model %s", len(ordered), originalModel)
+	log.Printf("[FAILED] All %d upstreams failed for model %s, last error: %v, last status: %d", len(ordered), originalModel, lastErr, lastStatus)
 	if lastStatus == 0 {
 		lastStatus = http.StatusBadGateway
 	}

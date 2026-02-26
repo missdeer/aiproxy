@@ -146,7 +146,7 @@ func geminiCLIRefreshAndUpdate(client *http.Client, storage *GeminiCLITokenStora
 		}
 	}
 
-	log.Printf("[GEMINICLI] Token refreshed for %s, project_id: %s", storage.Email, storage.ProjectID)
+	log.Printf("[GEMINICLI] Token refreshed for %s, expires %s, project_id: %s", storage.Email, time.Now().Add(expiresIn).Format(time.RFC3339), storage.ProjectID)
 	return expiresIn, nil
 }
 

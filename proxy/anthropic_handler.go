@@ -67,7 +67,7 @@ func (h *AnthropicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Extract prompt preview for logging
 	promptPreview := extractPromptPreview(req.Messages)
-	log.Printf("[REQUEST] Model: %s, Stream: %v, Prompt: %s", req.Model, req.Stream, promptPreview)
+	log.Printf("[ANTHROPIC REQUEST] Model: %s, Stream: %v, Prompt: %s", req.Model, req.Stream, promptPreview)
 
 	originalModel := req.Model
 
@@ -116,7 +116,8 @@ func (h *AnthropicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	for _, upstream := range ordered {
 		mappedModel := upstream.MapModel(originalModel)
-		log.Printf("[FORWARD] Upstream: %s, URL: %s, Model: %s -> %s", upstream.Name, upstream.BaseURL, originalModel, mappedModel)
+		log.Printf("[FORWARD] Upstream: %s, URL: %s, Model: %s -> %s, APIType: %s",
+			upstream.Name, upstream.BaseURL, originalModel, mappedModel, upstream.GetAPIType())
 
 		status, respBody, respHeaders, err := h.forwardRequest(upstream, mappedModel, body, req.Stream, r)
 		if err != nil {
