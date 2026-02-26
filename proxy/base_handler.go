@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -135,6 +136,44 @@ func StreamResponse(w http.ResponseWriter, body []byte) {
 
 	w.Write(body)
 	flusher.Flush()
+}
+
+// PipeResult reports the outcome of a PipeStream call.
+type PipeResult struct {
+	BytesWritten  int64
+	UpstreamErr   error // non-nil if upstream (src.Read) failed
+	DownstreamErr error // non-nil if downstream (w.Write) failed (client disconnect)
+}
+
+// OK returns true if streaming completed without error.
+func (r PipeResult) OK() bool { return r.UpstreamErr == nil && r.DownstreamErr == nil }
+
+// PipeStream copies from src to w with per-chunk flushing for true streaming.
+// Uses a manual read/write/flush loop (NOT io.CopyBuffer) to guarantee
+// each chunk is flushed immediately for incremental delivery.
+func PipeStream(w http.ResponseWriter, src io.Reader) PipeResult {
+	flusher, canFlush := w.(http.Flusher)
+	buf := make([]byte, 32*1024)
+	var total int64
+	for {
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			nw, writeErr := w.Write(buf[:n])
+			total += int64(nw)
+			if canFlush {
+				flusher.Flush()
+			}
+			if writeErr != nil {
+				return PipeResult{BytesWritten: total, DownstreamErr: writeErr}
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				return PipeResult{BytesWritten: total}
+			}
+			return PipeResult{BytesWritten: total, UpstreamErr: readErr}
+		}
+	}
 }
 
 // StripHopByHopHeaders removes hop-by-hop headers that should not be forwarded

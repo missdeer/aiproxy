@@ -234,7 +234,7 @@ func doHTTPRequest(client *http.Client, url string, body []byte, upstream config
 		url = url + "?" + rawQuery
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(originalReq.Context(), http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, nil, err
 	}
@@ -287,4 +287,54 @@ func doHTTPRequest(client *http.Client, url string, body []byte, upstream config
 	stripHopByHopHeaders(headers)
 
 	return resp.StatusCode, respBody, headers, nil
+}
+
+// doHTTPRequestStream builds and executes an HTTP request like doHTTPRequest,
+// but returns the raw *http.Response without reading the body.
+// The caller is responsible for closing resp.Body.
+// Uses originalReq.Context() for cancellation propagation.
+func doHTTPRequestStream(client *http.Client, url string, body []byte, upstream config.Upstream, apiType config.APIType, originalReq *http.Request, rawQuery string) (*http.Response, error) {
+	if rawQuery != "" {
+		url = url + "?" + rawQuery
+	}
+
+	req, err := http.NewRequestWithContext(originalReq.Context(), http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+
+	// Copy headers from original request
+	for k, vv := range originalReq.Header {
+		for _, v := range vv {
+			req.Header.Add(k, v)
+		}
+	}
+
+	stripHopByHopHeaders(req.Header)
+
+	// Set authentication based on API type
+	switch apiType {
+	case config.APITypeAnthropic:
+		req.Header.Set("x-api-key", upstream.Token)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Del("Authorization")
+	case config.APITypeOpenAI, config.APITypeResponses:
+		req.Header.Set("Authorization", "Bearer "+upstream.Token)
+		req.Header.Del("x-api-key")
+	case config.APITypeGemini:
+		if !strings.Contains(url, "key=") {
+			if strings.Contains(url, "?") {
+				url = url + "&key=" + upstream.Token
+			} else {
+				url = url + "?key=" + upstream.Token
+			}
+			req.URL, _ = req.URL.Parse(url)
+		}
+		req.Header.Del("Authorization")
+		req.Header.Del("x-api-key")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Del("Content-Length")
+
+	return client.Do(req)
 }

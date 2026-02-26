@@ -178,7 +178,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[FORWARD] Upstream: %s, URL: %s, Model: %s -> %s, APIType: %s",
 			upstream.Name, upstream.BaseURL, originalModel, mappedModel, upstream.GetAPIType())
 
-		status, respBody, respHeaders, err := h.forwardRequest(upstream, mappedModel, body, req.Stream, r)
+		status, respBody, respHeaders, streamResp, err := h.forwardRequest(upstream, mappedModel, body, req.Stream, r)
 		if err != nil {
 			log.Printf("[ERROR] Upstream %s connection error: %v", upstream.Name, err)
 			if h.balancer.RecordFailure(upstream.Name, originalModel) {
@@ -187,6 +187,35 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			lastErr = err
 			lastStatus = http.StatusBadGateway
 			continue
+		}
+
+		// True streaming passthrough: pipe response directly
+		if streamResp != nil {
+			defer streamResp.Body.Close()
+			for k, vv := range streamResp.Header {
+				for _, v := range vv {
+					w.Header().Add(k, v)
+				}
+			}
+			stripHopByHopHeaders(w.Header())
+			w.WriteHeader(status)
+
+			result := PipeStream(w, streamResp.Body)
+			switch {
+			case result.UpstreamErr != nil:
+				if r.Context().Err() != nil {
+					log.Printf("[INFO] Upstream %s stream aborted by client disconnect", upstream.Name)
+				} else {
+					log.Printf("[ERROR] Upstream %s stream read error: %v", upstream.Name, result.UpstreamErr)
+					h.balancer.RecordFailure(upstream.Name, originalModel)
+				}
+			case result.DownstreamErr != nil:
+				log.Printf("[INFO] Upstream %s stream ended by client disconnect: %v", upstream.Name, result.DownstreamErr)
+			default:
+				h.balancer.RecordSuccess(upstream.Name, originalModel)
+				log.Printf("[SUCCESS] Upstream %s streaming completed (%d bytes)", upstream.Name, result.BytesWritten)
+			}
+			return
 		}
 
 		if status >= 400 {
@@ -227,10 +256,10 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.writeResponsesError(w, lastStatus, "upstream_error", fmt.Sprintf("All upstreams failed: %v", lastErr))
 }
 
-func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string, originalBody []byte, clientWantsStream bool, originalReq *http.Request) (int, []byte, http.Header, error) {
+func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string, originalBody []byte, clientWantsStream bool, originalReq *http.Request) (int, []byte, http.Header, *http.Response, error) {
 	var bodyMap map[string]any
 	if err := json.Unmarshal(originalBody, &bodyMap); err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, nil, err
 	}
 
 	bodyMap["model"] = model
@@ -241,7 +270,7 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 	if apiType == config.APITypeResponses {
 		modifiedBody, err := json.Marshal(bodyMap)
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, nil, nil, err
 		}
 		url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
 		rawQuery := ""
@@ -249,59 +278,76 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 			rawQuery = originalReq.URL.RawQuery
 		}
 
+		// Streaming: return raw response for direct pipe to client
+		if clientWantsStream {
+			resp, err := doHTTPRequestStream(h.client, url, modifiedBody, upstream, config.APITypeResponses, originalReq, rawQuery)
+			if err != nil {
+				return 0, nil, nil, nil, err
+			}
+			if resp.StatusCode >= 400 {
+				defer resp.Body.Close()
+				errBody, _ := io.ReadAll(resp.Body)
+				headers := resp.Header.Clone()
+				stripHopByHopHeaders(headers)
+				return resp.StatusCode, errBody, headers, nil, nil
+			}
+			return resp.StatusCode, nil, nil, resp, nil
+		}
+
+		// Non-streaming: use existing buffered path
 		status, respBody, headers, err := doHTTPRequest(h.client, url, modifiedBody, upstream, config.APITypeResponses, originalReq, rawQuery)
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, nil, nil, err
 		}
-		return status, respBody, headers, nil
+		return status, respBody, headers, nil, nil
 	}
 
 	// For Responses inbound, the body is already in canonical (Responses) format
 	canonicalBytes, err := json.Marshal(bodyMap)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, nil, err
 	}
 
 	// Send via OutboundSender
 	sender := GetOutboundSender(apiType)
 	status, respBody, respHeaders, respFormat, err := sender.Send(h.client, upstream, canonicalBytes, clientWantsStream, originalReq)
 	if err != nil {
-		return status, nil, nil, err
+		return status, nil, nil, nil, err
 	}
 
 	// Error responses pass through without conversion
 	if status >= 400 {
-		return status, respBody, respHeaders, nil
+		return status, respBody, respHeaders, nil, nil
 	}
 
 	// If response is already in Responses format, no conversion needed
 	if respFormat == config.APITypeResponses {
 		if clientWantsStream {
 			// Already in Responses SSE format, pass through
-			return status, respBody, respHeaders, nil
+			return status, respBody, respHeaders, nil, nil
 		}
-		return status, respBody, respHeaders, nil
+		return status, respBody, respHeaders, nil, nil
 	}
 
 	// Convert response back to Responses format
 	if clientWantsStream {
 		responsesResp, err := h.convertStreamToResponses(bytes.NewReader(respBody), true, respFormat)
 		if err != nil {
-			return 0, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
+			return 0, nil, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
 		}
 		respHeaders.Del("Content-Length")
 		respHeaders.Del("Content-Encoding")
 		respHeaders.Set("Content-Type", "text/event-stream")
-		return status, responsesResp, respHeaders, nil
+		return status, responsesResp, respHeaders, nil, nil
 	}
 
 	responsesResp, err := convertToResponsesFormat(respBody, respFormat)
 	if err != nil {
-		return 0, nil, nil, fmt.Errorf("failed to convert response: %w", err)
+		return 0, nil, nil, nil, fmt.Errorf("failed to convert response: %w", err)
 	}
 	respHeaders.Del("Content-Length")
 	respHeaders.Set("Content-Type", "application/json")
-	return status, responsesResp, respHeaders, nil
+	return status, responsesResp, respHeaders, nil, nil
 }
 
 func (h *ResponsesHandler) streamResponse(w http.ResponseWriter, body []byte) {

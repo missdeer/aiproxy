@@ -185,7 +185,7 @@ func (h *GeminiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[FORWARD] Upstream: %s, URL: %s, Model: %s -> %s, APIType: %s",
 			upstream.Name, upstream.BaseURL, originalModel, mappedModel, upstream.GetAPIType())
 
-		status, respBody, respHeaders, err := h.forwardRequest(upstream, mappedModel, body, isStream, r)
+		status, respBody, respHeaders, streamResp, err := h.forwardRequest(upstream, mappedModel, body, isStream, r)
 		if err != nil {
 			log.Printf("[ERROR] Upstream %s connection error: %v", upstream.Name, err)
 			if h.balancer.RecordFailure(upstream.Name, originalModel) {
@@ -194,6 +194,35 @@ func (h *GeminiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			lastErr = err
 			lastStatus = http.StatusBadGateway
 			continue
+		}
+
+		// True streaming passthrough: pipe response directly
+		if streamResp != nil {
+			defer streamResp.Body.Close()
+			for k, vv := range streamResp.Header {
+				for _, v := range vv {
+					w.Header().Add(k, v)
+				}
+			}
+			stripHopByHopHeaders(w.Header())
+			w.WriteHeader(status)
+
+			result := PipeStream(w, streamResp.Body)
+			switch {
+			case result.UpstreamErr != nil:
+				if r.Context().Err() != nil {
+					log.Printf("[INFO] Upstream %s stream aborted by client disconnect", upstream.Name)
+				} else {
+					log.Printf("[ERROR] Upstream %s stream read error: %v", upstream.Name, result.UpstreamErr)
+					h.balancer.RecordFailure(upstream.Name, originalModel)
+				}
+			case result.DownstreamErr != nil:
+				log.Printf("[INFO] Upstream %s stream ended by client disconnect: %v", upstream.Name, result.DownstreamErr)
+			default:
+				h.balancer.RecordSuccess(upstream.Name, originalModel)
+				log.Printf("[SUCCESS] Upstream %s streaming completed (%d bytes)", upstream.Name, result.BytesWritten)
+			}
+			return
 		}
 
 		if status >= 400 {
@@ -248,10 +277,10 @@ func parseGeminiPath(path string) (model string, isStream bool) {
 	return
 }
 
-func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, originalBody []byte, isStream bool, originalReq *http.Request) (int, []byte, http.Header, error) {
+func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, originalBody []byte, isStream bool, originalReq *http.Request) (int, []byte, http.Header, *http.Response, error) {
 	var bodyMap map[string]any
 	if err := json.Unmarshal(originalBody, &bodyMap); err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, nil, err
 	}
 
 	apiType := upstream.GetAPIType()
@@ -269,11 +298,28 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 			rawQuery = originalReq.URL.RawQuery
 		}
 
+		// Streaming: return raw response for direct pipe to client
+		if isStream {
+			resp, err := doHTTPRequestStream(h.client, url, originalBody, upstream, config.APITypeGemini, originalReq, rawQuery)
+			if err != nil {
+				return 0, nil, nil, nil, err
+			}
+			if resp.StatusCode >= 400 {
+				defer resp.Body.Close()
+				errBody, _ := io.ReadAll(resp.Body)
+				headers := resp.Header.Clone()
+				stripHopByHopHeaders(headers)
+				return resp.StatusCode, errBody, headers, nil, nil
+			}
+			return resp.StatusCode, nil, nil, resp, nil
+		}
+
+		// Non-streaming: use existing buffered path
 		status, respBody, headers, err := doHTTPRequest(h.client, url, originalBody, upstream, config.APITypeGemini, originalReq, rawQuery)
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, nil, nil, err
 		}
-		return status, respBody, headers, nil
+		return status, respBody, headers, nil, nil
 	}
 
 	// Convert Gemini request to canonical (Responses) format
@@ -288,39 +334,39 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 	}
 	canonicalBytes, err := json.Marshal(canonicalBody)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, nil, err
 	}
 
 	// Send via OutboundSender
 	sender := GetOutboundSender(apiType)
 	status, respBody, respHeaders, respFormat, err := sender.Send(h.client, upstream, canonicalBytes, isStream, originalReq)
 	if err != nil {
-		return status, nil, nil, err
+		return status, nil, nil, nil, err
 	}
 
 	// Error responses pass through without conversion
 	if status >= 400 {
-		return status, respBody, respHeaders, nil
+		return status, respBody, respHeaders, nil, nil
 	}
 
 	// Convert response back to Gemini format
 	if isStream {
 		geminiResp, err := h.convertStreamToGemini(bytes.NewReader(respBody), respFormat)
 		if err != nil {
-			return 0, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
+			return 0, nil, nil, nil, fmt.Errorf("failed to convert stream response: %w", err)
 		}
 		respHeaders.Del("Content-Length")
 		respHeaders.Set("Content-Type", "application/json")
-		return status, geminiResp, respHeaders, nil
+		return status, geminiResp, respHeaders, nil, nil
 	}
 
 	geminiResp, err := convertToGeminiResponse(respBody, respFormat)
 	if err != nil {
-		return 0, nil, nil, fmt.Errorf("failed to convert response: %w", err)
+		return 0, nil, nil, nil, fmt.Errorf("failed to convert response: %w", err)
 	}
 	respHeaders.Del("Content-Length")
 	respHeaders.Set("Content-Type", "application/json")
-	return status, geminiResp, respHeaders, nil
+	return status, geminiResp, respHeaders, nil, nil
 }
 
 func (h *GeminiHandler) streamResponse(w http.ResponseWriter, body []byte) {
