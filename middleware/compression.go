@@ -16,30 +16,31 @@ import (
 func CompressBody(data []byte, encoding string) ([]byte, string, error) {
 	encoding = strings.TrimSpace(strings.ToLower(encoding))
 
+	var compressed []byte
+	var ce string
+	var err error
+
 	switch encoding {
 	case "", "none", "identity":
 		return data, "", nil
 	case "gzip", "x-gzip":
-		compressed, ce, err := compressGzip(data)
-		if err != nil {
-			return nil, "", err
-		}
-		return compressed, ce, nil
+		compressed, ce, err = compressGzip(data)
 	case "zstd", "x-zstd":
-		compressed, ce, err := compressZstd(data)
-		if err != nil {
-			return nil, "", err
-		}
-		return compressed, ce, nil
+		compressed, ce, err = compressZstd(data)
 	case "br":
-		compressed, ce, err := compressBrotli(data)
-		if err != nil {
-			return nil, "", err
-		}
-		return compressed, ce, nil
+		compressed, ce, err = compressBrotli(data)
 	default:
 		return nil, "", fmt.Errorf("unsupported request compression: %s", encoding)
 	}
+
+	if err != nil {
+		return nil, "", err
+	}
+	// If compression inflates the data, fall back to uncompressed.
+	if len(compressed) >= len(data) {
+		return data, "", nil
+	}
+	return compressed, ce, nil
 }
 
 func compressGzip(data []byte) ([]byte, string, error) {
