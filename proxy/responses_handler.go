@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -122,19 +121,9 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var bodyMap map[string]any
 	if err := json.Unmarshal(body, &bodyMap); err != nil {
-		// Write body to temp file for inspection
-		tmpFile, tmpErr := os.CreateTemp("", "aiproxy-invalid-body-*.bin")
-		tmpPath := ""
-		if tmpErr == nil {
-			tmpPath = tmpFile.Name()
-			tmpFile.Write(body)
-			tmpFile.Close()
-		}
 		log.Printf("[ERROR] Invalid JSON request: %v", err)
 		log.Printf("[ERROR] Request details: Method=%s, Path=%s, Content-Type=%s, Content-Length=%d",
 			r.Method, r.URL.Path, r.Header.Get("Content-Type"), len(body))
-		log.Printf("[ERROR] Body saved to: %s", tmpPath)
-		log.Printf("[ERROR] Body preview (first 200 bytes): %q", truncateString(string(body), 200))
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
