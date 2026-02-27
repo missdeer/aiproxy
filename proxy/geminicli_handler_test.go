@@ -112,4 +112,8 @@ func TestGeminiCLIAuth_ProjectIDRetryAfterFailure(t *testing.T) {
 	if c := discoveryCallCount.Load(); c != 2 {
 		t.Fatalf("discovery calls = %d, want 2 (should use cache)", c)
 	}
+
+	// Allow the async save goroutine in oauthcache to finish writing
+	// before t.TempDir() cleanup removes the directory.
+	time.Sleep(50 * time.Millisecond)
 }
