@@ -110,6 +110,8 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	pathSuffix := strings.TrimPrefix(r.URL.Path, "/v1/responses")
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -126,7 +128,8 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Extract prompt preview for logging
 	promptPreview := extractResponsesPromptPreview(req.Input)
-	log.Printf("[RESPONSES REQUEST] Model: %s, Stream: %v, Prompt: %s", req.Model, req.Stream, promptPreview)
+	endpoint := "/v1/responses" + pathSuffix
+	log.Printf("[RESPONSES REQUEST] Endpoint: %s, Model: %s, Stream: %v, Prompt: %s", endpoint, req.Model, req.Stream, promptPreview)
 
 	originalModel := req.Model
 
@@ -178,7 +181,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[FORWARD] Upstream: %s, URL: %s, Model: %s -> %s, APIType: %s",
 			upstream.Name, upstream.BaseURL, originalModel, mappedModel, upstream.GetAPIType())
 
-		status, respBody, respHeaders, streamResp, err := h.forwardRequest(upstream, mappedModel, body, req.Stream, r)
+		status, respBody, respHeaders, streamResp, err := h.forwardRequest(upstream, mappedModel, body, req.Stream, r, pathSuffix)
 		if err != nil {
 			log.Printf("[ERROR] Upstream %s connection error: %v", upstream.Name, err)
 			if h.balancer.RecordFailure(upstream.Name, originalModel) {
@@ -256,7 +259,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.writeResponsesError(w, lastStatus, "upstream_error", fmt.Sprintf("All upstreams failed: %v", lastErr))
 }
 
-func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string, originalBody []byte, clientWantsStream bool, originalReq *http.Request) (int, []byte, http.Header, *http.Response, error) {
+func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string, originalBody []byte, clientWantsStream bool, originalReq *http.Request, pathSuffix string) (int, []byte, http.Header, *http.Response, error) {
 	var bodyMap map[string]any
 	if err := json.Unmarshal(originalBody, &bodyMap); err != nil {
 		return 0, nil, nil, nil, err
@@ -272,7 +275,7 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 		if err != nil {
 			return 0, nil, nil, nil, err
 		}
-		url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
+		url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses" + pathSuffix
 		rawQuery := ""
 		if originalReq.URL.RawQuery != "" {
 			rawQuery = originalReq.URL.RawQuery

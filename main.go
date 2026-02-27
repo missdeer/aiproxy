@@ -65,6 +65,7 @@ func main() {
 	http.Handle("/v1/messages", anthropicHandler)
 	http.Handle("/v1/chat/completions", openaiHandler)
 	http.Handle("/v1/responses", responsesHandler)
+	http.Handle("/v1/responses/", responsesHandler)
 	http.Handle("/v1beta/models/", geminiHandler)
 	http.Handle("/v1/models/", geminiHandler)
 
