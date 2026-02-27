@@ -252,6 +252,9 @@ func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBo
 	req.Header.Set("X-Goog-Api-Client", geminiCLIAPIClient)
 	req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
 	ApplyAcceptEncoding(req, upstream)
+	if _, err := ApplyBodyCompression(req, reqBody, upstream); err != nil {
+		return 0, nil, nil, fmt.Errorf("request body compression: %w", err)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {

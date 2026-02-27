@@ -155,6 +155,9 @@ func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestB
 	req.Header.Set("X-Stainless-Timeout", "600")
 	req.Header.Set("Connection", "keep-alive")
 	ApplyAcceptEncoding(req, upstream)
+	if _, err := ApplyBodyCompression(req, modifiedBody, upstream); err != nil {
+		return 0, nil, nil, fmt.Errorf("request body compression: %w", err)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {

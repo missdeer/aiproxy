@@ -219,6 +219,31 @@ func TestUpstreamGetAcceptEncoding(t *testing.T) {
 	}
 }
 
+func TestUpstreamGetRequestContentEncoding(t *testing.T) {
+	tests := []struct {
+		name               string
+		requestCompression string
+		want               string
+	}{
+		{"empty defaults to none", "", ""},
+		{"none", "none", ""},
+		{"identity", "identity", ""},
+		{"trim and lowercase", "  GZIP  ", "gzip"},
+		{"zstd", "zstd", "zstd"},
+		{"br", "br", "br"},
+		{"unknown ignored", "snappy", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := Upstream{Name: "test-upstream", RequestCompression: tt.requestCompression}
+			if got := u.GetRequestContentEncoding(); got != tt.want {
+				t.Errorf("GetRequestContentEncoding() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestUpstreamIsEnabled(t *testing.T) {
 	trueVal := true
 	falseVal := false

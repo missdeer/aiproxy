@@ -173,6 +173,9 @@ func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody [
 		req.Header.Set("Chatgpt-Account-Id", storage.AccountID)
 	}
 	ApplyAcceptEncoding(req, upstream)
+	if _, err := ApplyBodyCompression(req, modifiedBody, upstream); err != nil {
+		return 0, nil, nil, fmt.Errorf("request body compression: %w", err)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {

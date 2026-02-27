@@ -29,16 +29,17 @@ const (
 )
 
 type Upstream struct {
-	Name            string       `yaml:"name"`
-	Enabled         *bool        `yaml:"enabled"` // Whether this upstream is enabled, defaults to true
-	BaseURL         string       `yaml:"base_url"`
-	Token           string       `yaml:"token"`
-	Weight          int          `yaml:"weight"`
-	ModelMappings   ModelMapping `yaml:"model_mappings"`
-	AvailableModels []string     `yaml:"available_models"`
-	APIType         APIType      `yaml:"api_type"`    // "anthropic", "openai", "gemini", "responses", or "codex"
-	AuthFiles       []string     `yaml:"auth_files"`  // Paths to auth JSON files (used by codex api_type, round-robin)
-	Compression     string       `yaml:"compression"` // zstd (default), gzip, br, none
+	Name               string       `yaml:"name"`
+	Enabled            *bool        `yaml:"enabled"` // Whether this upstream is enabled, defaults to true
+	BaseURL            string       `yaml:"base_url"`
+	Token              string       `yaml:"token"`
+	Weight             int          `yaml:"weight"`
+	ModelMappings      ModelMapping `yaml:"model_mappings"`
+	AvailableModels    []string     `yaml:"available_models"`
+	APIType            APIType      `yaml:"api_type"`            // "anthropic", "openai", "gemini", "responses", or "codex"
+	AuthFiles          []string     `yaml:"auth_files"`          // Paths to auth JSON files (used by codex api_type, round-robin)
+	Compression        string       `yaml:"compression"`         // zstd (default), gzip, br, none
+	RequestCompression string       `yaml:"request_compression"` // none (default), gzip, zstd, br
 }
 
 // IsEnabled returns whether this upstream is enabled (defaults to true)
@@ -73,6 +74,24 @@ func (u *Upstream) GetAcceptEncoding() string {
 	default:
 		log.Printf("[CONFIG] upstream %q: unknown compression %q, falling back to zstd", u.Name, u.Compression)
 		return "zstd"
+	}
+}
+
+// GetRequestContentEncoding returns normalized request compression encoding.
+// Returns "" for none/identity/empty. Unknown values log warning and return "".
+func (u *Upstream) GetRequestContentEncoding() string {
+	switch strings.TrimSpace(strings.ToLower(u.RequestCompression)) {
+	case "", "none", "identity":
+		return ""
+	case "gzip":
+		return "gzip"
+	case "zstd":
+		return "zstd"
+	case "br":
+		return "br"
+	default:
+		log.Printf("[CONFIG] upstream %q: unknown request_compression %q, ignoring", u.Name, u.RequestCompression)
+		return ""
 	}
 }
 

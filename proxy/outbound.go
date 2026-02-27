@@ -272,6 +272,9 @@ func doHTTPRequest(client *http.Client, url string, body []byte, upstream config
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Del("Content-Length")
 	ApplyAcceptEncoding(req, upstream)
+	if _, err := ApplyBodyCompression(req, body, upstream); err != nil {
+		return 0, nil, nil, fmt.Errorf("request body compression: %w", err)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -337,6 +340,9 @@ func doHTTPRequestStream(client *http.Client, url string, body []byte, upstream 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Del("Content-Length")
 	ApplyAcceptEncoding(req, upstream)
+	if _, err := ApplyBodyCompression(req, body, upstream); err != nil {
+		return nil, fmt.Errorf("request body compression: %w", err)
+	}
 
 	return client.Do(req)
 }

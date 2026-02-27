@@ -220,6 +220,9 @@ func ForwardToAntigravity(client *http.Client, upstream config.Upstream, request
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("User-Agent", upstreammeta.UserAgentAntigravity)
 	ApplyAcceptEncoding(req, upstream)
+	if _, err := ApplyBodyCompression(req, reqBody, upstream); err != nil {
+		return 0, nil, nil, fmt.Errorf("request body compression: %w", err)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {

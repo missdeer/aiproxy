@@ -48,7 +48,7 @@ func DecompressionMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Decompress if needed
-		decompressed, err := decompressBody(body, r.Header.Get("Content-Encoding"), maxDecompressedRequestBodyBytes)
+		decompressed, usedEncodings, err := decompressBodyWithMeta(body, r.Header.Get("Content-Encoding"), maxDecompressedRequestBodyBytes)
 		if err != nil {
 			if errors.Is(err, errDecompressedBodyTooLarge) {
 				http.Error(w, "Decompressed request body too large", http.StatusRequestEntityTooLarge)
@@ -57,6 +57,10 @@ func DecompressionMiddleware(next http.Handler) http.Handler {
 			log.Printf("[ERROR] Failed to decompress request body: %v", err)
 			http.Error(w, "Failed to decompress request body", http.StatusBadRequest)
 			return
+		}
+		if usedEncodings != "" {
+			log.Printf("[INBOUND DECOMPRESS] caller=client_request method=%s path=%s encoding=%s bytes=%d->%d",
+				r.Method, r.URL.Path, usedEncodings, len(body), len(decompressed))
 		}
 
 		// Replace body with decompressed content
@@ -70,8 +74,13 @@ func DecompressionMiddleware(next http.Handler) http.Handler {
 }
 
 func decompressBody(body []byte, contentEncoding string, maxDecompressedSize int64) ([]byte, error) {
+	decompressed, _, err := decompressBodyWithMeta(body, contentEncoding, maxDecompressedSize)
+	return decompressed, err
+}
+
+func decompressBodyWithMeta(body []byte, contentEncoding string, maxDecompressedSize int64) ([]byte, string, error) {
 	if len(body) == 0 {
-		return body, nil
+		return body, "", nil
 	}
 
 	encodings := parseContentEncodings(contentEncoding)
@@ -83,7 +92,7 @@ func decompressBody(body []byte, contentEncoding string, maxDecompressedSize int
 	}
 
 	if len(encodings) == 0 {
-		return body, nil
+		return body, "", nil
 	}
 
 	decompressed := body
@@ -97,18 +106,12 @@ func decompressBody(body []byte, contentEncoding string, maxDecompressedSize int
 			var err error
 			decompressed, err = decompressByEncoding(decompressed, coding, maxDecompressedSize)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			decompressedCodings = append(decompressedCodings, coding)
 		}
 	}
-
-	if len(decompressedCodings) > 0 {
-		log.Printf("[DECOMPRESS] %s: %d bytes -> %d bytes",
-			strings.Join(decompressedCodings, ","), len(body), len(decompressed))
-	}
-
-	return decompressed, nil
+	return decompressed, strings.Join(decompressedCodings, ","), nil
 }
 
 func parseContentEncodings(contentEncoding string) []string {

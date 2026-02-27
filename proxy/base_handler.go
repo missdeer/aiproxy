@@ -1,7 +1,10 @@
 package proxy
 
 import (
+	"bytes"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -60,6 +63,37 @@ func ApplyAcceptEncoding(req *http.Request, upstream config.Upstream) {
 	} else {
 		req.Header.Del("Accept-Encoding")
 	}
+}
+
+// ApplyBodyCompression mutates request/body according to upstream request_compression.
+// Returns the final body bytes actually attached to req.
+func ApplyBodyCompression(req *http.Request, body []byte, upstream config.Upstream) ([]byte, error) {
+	encoding := upstream.GetRequestContentEncoding()
+	finalBody := body
+	contentEncoding := ""
+	if encoding != "" {
+		compressed, ce, err := middleware.CompressBody(body, encoding)
+		if err != nil {
+			return nil, err
+		}
+		finalBody = compressed
+		contentEncoding = ce
+	}
+
+	req.Body = io.NopCloser(bytes.NewReader(finalBody))
+	req.ContentLength = int64(len(finalBody))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(finalBody)), nil
+	}
+	if contentEncoding == "" {
+		req.Header.Del("Content-Encoding")
+	} else {
+		req.Header.Set("Content-Encoding", contentEncoding)
+		log.Printf("[OUTBOUND COMPRESS] caller=upstream_request upstream=%s method=%s host=%s path=%s encoding=%s bytes=%d->%d",
+			upstream.Name, req.Method, req.URL.Host, req.URL.Path, contentEncoding, len(body), len(finalBody))
+	}
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(finalBody)))
+	return finalBody, nil
 }
 
 // UpdateConfig updates the handler's configuration
