@@ -154,6 +154,7 @@ func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestB
 	req.Header.Set("X-Stainless-Os", claudeCodeMapStainlessOS())
 	req.Header.Set("X-Stainless-Timeout", "600")
 	req.Header.Set("Connection", "keep-alive")
+	ApplyAcceptEncoding(req, upstream)
 
 	resp, err := client.Do(req)
 	if err != nil {

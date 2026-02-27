@@ -271,6 +271,7 @@ func doHTTPRequest(client *http.Client, url string, body []byte, upstream config
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Del("Content-Length")
+	ApplyAcceptEncoding(req, upstream)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -335,6 +336,7 @@ func doHTTPRequestStream(client *http.Client, url string, body []byte, upstream 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Del("Content-Length")
+	ApplyAcceptEncoding(req, upstream)
 
 	return client.Do(req)
 }

@@ -172,6 +172,7 @@ func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody [
 	if storage.AccountID != "" {
 		req.Header.Set("Chatgpt-Account-Id", storage.AccountID)
 	}
+	ApplyAcceptEncoding(req, upstream)
 
 	resp, err := client.Do(req)
 	if err != nil {

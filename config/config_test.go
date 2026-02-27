@@ -95,6 +95,9 @@ upstreams:
 	if cfg.Upstreams[0].Weight != 1 {
 		t.Errorf("Upstream.Weight default = %d, want %d", cfg.Upstreams[0].Weight, 1)
 	}
+	if cfg.Upstreams[0].Compression != "zstd" {
+		t.Errorf("Upstream.Compression default = %q, want %q", cfg.Upstreams[0].Compression, "zstd")
+	}
 }
 
 func TestUpstreamMapModel(t *testing.T) {
@@ -187,6 +190,30 @@ func TestUpstreamGetAPIType(t *testing.T) {
 			upstream := Upstream{APIType: tt.apiType}
 			if got := upstream.GetAPIType(); got != tt.want {
 				t.Errorf("GetAPIType() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpstreamGetAcceptEncoding(t *testing.T) {
+	tests := []struct {
+		name        string
+		compression string
+		want        string
+	}{
+		{"empty defaults to zstd", "", "zstd"},
+		{"zstd", "zstd", "zstd"},
+		{"gzip", "gzip", "gzip"},
+		{"br", "br", "br"},
+		{"none disables header", "none", ""},
+		{"unknown falls back to zstd", "snappy", "zstd"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := Upstream{Name: "test-upstream", Compression: tt.compression}
+			if got := u.GetAcceptEncoding(); got != tt.want {
+				t.Errorf("GetAcceptEncoding() = %q, want %q", got, tt.want)
 			}
 		})
 	}

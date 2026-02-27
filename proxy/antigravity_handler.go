@@ -219,6 +219,7 @@ func ForwardToAntigravity(client *http.Client, upstream config.Upstream, request
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("User-Agent", upstreammeta.UserAgentAntigravity)
+	ApplyAcceptEncoding(req, upstream)
 
 	resp, err := client.Do(req)
 	if err != nil {

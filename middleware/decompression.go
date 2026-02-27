@@ -49,8 +49,6 @@ func DecompressionMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// decompressBody decompresses the request body based on Content-Encoding header or magic bytes.
-// Supports: gzip, zstd, br (brotli), and none (uncompressed).
 func decompressBody(body []byte, contentEncoding string) ([]byte, error) {
 	if len(body) == 0 {
 		return body, nil

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,8 +36,9 @@ type Upstream struct {
 	Weight          int          `yaml:"weight"`
 	ModelMappings   ModelMapping `yaml:"model_mappings"`
 	AvailableModels []string     `yaml:"available_models"`
-	APIType         APIType      `yaml:"api_type"`   // "anthropic", "openai", "gemini", "responses", or "codex"
-	AuthFiles       []string     `yaml:"auth_files"` // Paths to auth JSON files (used by codex api_type, round-robin)
+	APIType         APIType      `yaml:"api_type"`    // "anthropic", "openai", "gemini", "responses", or "codex"
+	AuthFiles       []string     `yaml:"auth_files"`  // Paths to auth JSON files (used by codex api_type, round-robin)
+	Compression     string       `yaml:"compression"` // zstd (default), gzip, br, none
 }
 
 // IsEnabled returns whether this upstream is enabled (defaults to true)
@@ -53,6 +55,25 @@ func (u *Upstream) GetAPIType() APIType {
 		return APITypeAnthropic
 	}
 	return u.APIType
+}
+
+// GetAcceptEncoding returns the validated Accept-Encoding value for this upstream.
+// Only supports zstd, gzip, br. Returns "" for none.
+// Falls back to zstd for unknown values.
+func (u *Upstream) GetAcceptEncoding() string {
+	switch u.Compression {
+	case "zstd", "":
+		return "zstd"
+	case "gzip":
+		return "gzip"
+	case "br":
+		return "br"
+	case "none":
+		return ""
+	default:
+		log.Printf("[CONFIG] upstream %q: unknown compression %q, falling back to zstd", u.Name, u.Compression)
+		return "zstd"
+	}
 }
 
 func (u *Upstream) MapModel(model string) string {
@@ -158,6 +179,9 @@ func Load(path string) (*Config, error) {
 	for i := range cfg.Upstreams {
 		if cfg.Upstreams[i].Weight <= 0 {
 			cfg.Upstreams[i].Weight = 1
+		}
+		if cfg.Upstreams[i].Compression == "" {
+			cfg.Upstreams[i].Compression = "zstd"
 		}
 		// Deduplicate AuthFiles using normalized absolute paths.
 		// Relative paths are resolved against the process CWD (not the config file location).

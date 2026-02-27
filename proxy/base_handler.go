@@ -9,6 +9,7 @@ import (
 
 	"github.com/missdeer/aiproxy/balancer"
 	"github.com/missdeer/aiproxy/config"
+	"github.com/missdeer/aiproxy/middleware"
 )
 
 // BaseHandler contains shared fields and utilities for all handlers
@@ -35,16 +36,30 @@ func NewBaseHandler(cfg *config.Config) BaseHandler {
 func newHTTPClient(responseHeaderTimeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = responseHeaderTimeout
-	return &http.Client{Transport: transport}
+	transport.DisableCompression = true
+	return &http.Client{
+		Transport: &middleware.CompressedTransport{Base: transport},
+	}
 }
 
 // ClientResponseHeaderTimeout extracts the ResponseHeaderTimeout from a client's transport.
 // Falls back to 60s if not set.
 func ClientResponseHeaderTimeout(client *http.Client) time.Duration {
-	if t, ok := client.Transport.(*http.Transport); ok && t.ResponseHeaderTimeout > 0 {
+	t := middleware.UnwrapTransport(client.Transport)
+	if t != nil && t.ResponseHeaderTimeout > 0 {
 		return t.ResponseHeaderTimeout
 	}
 	return 60 * time.Second
+}
+
+// ApplyAcceptEncoding sets or removes Accept-Encoding based on upstream compression config.
+// Called by all outbound request builders to ensure consistent behavior.
+func ApplyAcceptEncoding(req *http.Request, upstream config.Upstream) {
+	if ae := upstream.GetAcceptEncoding(); ae != "" {
+		req.Header.Set("Accept-Encoding", ae)
+	} else {
+		req.Header.Del("Accept-Encoding")
+	}
 }
 
 // UpdateConfig updates the handler's configuration
