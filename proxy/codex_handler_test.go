@@ -519,8 +519,9 @@ func TestForwardToCodex_InputStringConversion(t *testing.T) {
 	}
 
 	upstream := config.Upstream{
-		Name:      "test-codex",
-		AuthFiles: []string{authFile},
+		Name:               "test-codex",
+		AuthFiles:          []string{authFile},
+		RequestCompression: "none",
 	}
 
 	requestBody := []byte(`{"input":"Hello, please help","model":"codex-mini-latest"}`)
@@ -613,8 +614,9 @@ func TestForwardToCodex_StreamingPassthrough(t *testing.T) {
 	}
 
 	upstream := config.Upstream{
-		Name:      "test-codex",
-		AuthFiles: []string{authFile},
+		Name:               "test-codex",
+		AuthFiles:          []string{authFile},
+		RequestCompression: "none",
 	}
 
 	// clientWantsStream=true → raw SSE passthrough

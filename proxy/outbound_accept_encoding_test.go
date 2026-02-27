@@ -10,17 +10,14 @@ import (
 	"github.com/missdeer/aiproxy/config"
 )
 
-func TestDoHTTPRequest_AcceptEncodingFromUpstreamConfig(t *testing.T) {
+func TestDoHTTPRequest_AcceptEncodingFixedCapabilities(t *testing.T) {
 	tests := []struct {
-		name        string
-		compression string
-		want        string
+		name     string
+		upstream config.Upstream
+		want     string
 	}{
-		{"zstd", "zstd", "zstd"},
-		{"gzip", "gzip", "gzip"},
-		{"none", "none", ""},
-		{"empty defaults to zstd", "", "zstd"},
-		{"unknown falls back to zstd", "snappy", "zstd"},
+		{"default", config.Upstream{Name: "test-upstream"}, "gzip, zstd, br, identity"},
+		{"same value when upstream set", config.Upstream{Name: "test-upstream"}, "gzip, zstd, br, identity"},
 	}
 
 	for _, tt := range tests {
@@ -37,12 +34,9 @@ func TestDoHTTPRequest_AcceptEncodingFromUpstreamConfig(t *testing.T) {
 			originalReq := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			originalReq.Header.Set("Accept-Encoding", "br")
 
-			upstream := config.Upstream{
-				Name:        "test-upstream",
-				BaseURL:     upstreamSrv.URL,
-				Token:       "test-token",
-				Compression: tt.compression,
-			}
+			upstream := tt.upstream
+			upstream.BaseURL = upstreamSrv.URL
+			upstream.Token = "test-token"
 
 			client := newHTTPClient(10 * time.Second)
 			status, _, _, err := doHTTPRequest(client, upstreamSrv.URL, []byte(`{}`), upstream, config.APITypeOpenAI, originalReq, "")
@@ -59,15 +53,14 @@ func TestDoHTTPRequest_AcceptEncodingFromUpstreamConfig(t *testing.T) {
 	}
 }
 
-func TestDoHTTPRequestStream_AcceptEncodingFromUpstreamConfig(t *testing.T) {
+func TestDoHTTPRequestStream_AcceptEncodingFixedCapabilities(t *testing.T) {
 	tests := []struct {
-		name        string
-		compression string
-		want        string
+		name     string
+		upstream config.Upstream
+		want     string
 	}{
-		{"zstd", "zstd", "zstd"},
-		{"none", "none", ""},
-		{"unknown falls back to zstd", "snappy", "zstd"},
+		{"default", config.Upstream{Name: "test-upstream"}, "gzip, zstd, br, identity"},
+		{"same value when upstream set", config.Upstream{Name: "test-upstream"}, "gzip, zstd, br, identity"},
 	}
 
 	for _, tt := range tests {
@@ -84,12 +77,9 @@ func TestDoHTTPRequestStream_AcceptEncodingFromUpstreamConfig(t *testing.T) {
 			originalReq := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			originalReq.Header.Set("Accept-Encoding", "br")
 
-			upstream := config.Upstream{
-				Name:        "test-upstream",
-				BaseURL:     upstreamSrv.URL,
-				Token:       "test-token",
-				Compression: tt.compression,
-			}
+			upstream := tt.upstream
+			upstream.BaseURL = upstreamSrv.URL
+			upstream.Token = "test-token"
 
 			client := newHTTPClient(10 * time.Second)
 			resp, err := doHTTPRequestStream(client, upstreamSrv.URL, []byte(`{}`), upstream, config.APITypeOpenAI, originalReq, "")

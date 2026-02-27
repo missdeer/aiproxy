@@ -55,14 +55,10 @@ func ClientResponseHeaderTimeout(client *http.Client) time.Duration {
 	return 60 * time.Second
 }
 
-// ApplyAcceptEncoding sets or removes Accept-Encoding based on upstream compression config.
+// ApplyAcceptEncoding sets the fixed Accept-Encoding negotiation set for upstream requests.
 // Called by all outbound request builders to ensure consistent behavior.
 func ApplyAcceptEncoding(req *http.Request, upstream config.Upstream) {
-	if ae := upstream.GetAcceptEncoding(); ae != "" {
-		req.Header.Set("Accept-Encoding", ae)
-	} else {
-		req.Header.Del("Accept-Encoding")
-	}
+	req.Header.Set("Accept-Encoding", upstream.GetAcceptEncoding())
 }
 
 // ApplyBodyCompression mutates request/body according to upstream request_compression.

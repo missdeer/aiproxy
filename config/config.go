@@ -38,8 +38,7 @@ type Upstream struct {
 	AvailableModels    []string     `yaml:"available_models"`
 	APIType            APIType      `yaml:"api_type"`            // "anthropic", "openai", "gemini", "responses", or "codex"
 	AuthFiles          []string     `yaml:"auth_files"`          // Paths to auth JSON files (used by codex api_type, round-robin)
-	Compression        string       `yaml:"compression"`         // zstd (default), gzip, br, none
-	RequestCompression string       `yaml:"request_compression"` // none (default), gzip, zstd, br
+	RequestCompression string       `yaml:"request_compression"` // zstd (default), gzip, br, none
 }
 
 // IsEnabled returns whether this upstream is enabled (defaults to true)
@@ -58,40 +57,29 @@ func (u *Upstream) GetAPIType() APIType {
 	return u.APIType
 }
 
-// GetAcceptEncoding returns the validated Accept-Encoding value for this upstream.
-// Only supports zstd, gzip, br. Returns "" for none.
-// Falls back to zstd for unknown values.
+// GetAcceptEncoding returns the fixed upstream Accept-Encoding negotiation set.
+// This is intentionally not configurable per upstream.
 func (u *Upstream) GetAcceptEncoding() string {
-	switch u.Compression {
-	case "zstd", "":
-		return "zstd"
-	case "gzip":
-		return "gzip"
-	case "br":
-		return "br"
-	case "none":
-		return ""
-	default:
-		log.Printf("[CONFIG] upstream %q: unknown compression %q, falling back to zstd", u.Name, u.Compression)
-		return "zstd"
-	}
+	return "gzip, zstd, br, identity"
 }
 
 // GetRequestContentEncoding returns normalized request compression encoding.
-// Returns "" for none/identity/empty. Unknown values log warning and return "".
+// Returns "zstd" for empty/unknown (default enabled), or "" for none/identity.
 func (u *Upstream) GetRequestContentEncoding() string {
 	switch strings.TrimSpace(strings.ToLower(u.RequestCompression)) {
-	case "", "none", "identity":
+	case "", "zstd", "x-zstd":
+		return "zstd"
+	case "none", "identity":
 		return ""
 	case "gzip":
 		return "gzip"
-	case "zstd":
-		return "zstd"
+	case "x-gzip":
+		return "gzip"
 	case "br":
 		return "br"
 	default:
-		log.Printf("[CONFIG] upstream %q: unknown request_compression %q, ignoring", u.Name, u.RequestCompression)
-		return ""
+		log.Printf("[CONFIG] upstream %q: unknown request_compression %q, defaulting to zstd", u.Name, u.RequestCompression)
+		return "zstd"
 	}
 }
 
@@ -199,8 +187,8 @@ func Load(path string) (*Config, error) {
 		if cfg.Upstreams[i].Weight <= 0 {
 			cfg.Upstreams[i].Weight = 1
 		}
-		if cfg.Upstreams[i].Compression == "" {
-			cfg.Upstreams[i].Compression = "zstd"
+		if cfg.Upstreams[i].RequestCompression == "" {
+			cfg.Upstreams[i].RequestCompression = "zstd"
 		}
 		// Deduplicate AuthFiles using normalized absolute paths.
 		// Relative paths are resolved against the process CWD (not the config file location).

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/andybalholm/brotli"
@@ -25,21 +24,18 @@ func CompressBody(data []byte, encoding string) ([]byte, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		log.Printf("[COMPRESS] %s: %d bytes -> %d bytes", ce, len(data), len(compressed))
 		return compressed, ce, nil
 	case "zstd", "x-zstd":
 		compressed, ce, err := compressZstd(data)
 		if err != nil {
 			return nil, "", err
 		}
-		log.Printf("[COMPRESS] %s: %d bytes -> %d bytes", ce, len(data), len(compressed))
 		return compressed, ce, nil
 	case "br":
 		compressed, ce, err := compressBrotli(data)
 		if err != nil {
 			return nil, "", err
 		}
-		log.Printf("[COMPRESS] %s: %d bytes -> %d bytes", ce, len(data), len(compressed))
 		return compressed, ce, nil
 	default:
 		return nil, "", fmt.Errorf("unsupported request compression: %s", encoding)

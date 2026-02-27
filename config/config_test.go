@@ -95,8 +95,8 @@ upstreams:
 	if cfg.Upstreams[0].Weight != 1 {
 		t.Errorf("Upstream.Weight default = %d, want %d", cfg.Upstreams[0].Weight, 1)
 	}
-	if cfg.Upstreams[0].Compression != "zstd" {
-		t.Errorf("Upstream.Compression default = %q, want %q", cfg.Upstreams[0].Compression, "zstd")
+	if cfg.Upstreams[0].RequestCompression != "zstd" {
+		t.Errorf("Upstream.RequestCompression default = %q, want %q", cfg.Upstreams[0].RequestCompression, "zstd")
 	}
 }
 
@@ -196,26 +196,9 @@ func TestUpstreamGetAPIType(t *testing.T) {
 }
 
 func TestUpstreamGetAcceptEncoding(t *testing.T) {
-	tests := []struct {
-		name        string
-		compression string
-		want        string
-	}{
-		{"empty defaults to zstd", "", "zstd"},
-		{"zstd", "zstd", "zstd"},
-		{"gzip", "gzip", "gzip"},
-		{"br", "br", "br"},
-		{"none disables header", "none", ""},
-		{"unknown falls back to zstd", "snappy", "zstd"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			u := Upstream{Name: "test-upstream", Compression: tt.compression}
-			if got := u.GetAcceptEncoding(); got != tt.want {
-				t.Errorf("GetAcceptEncoding() = %q, want %q", got, tt.want)
-			}
-		})
+	u := Upstream{Name: "test-upstream"}
+	if got := u.GetAcceptEncoding(); got != "gzip, zstd, br, identity" {
+		t.Errorf("GetAcceptEncoding() = %q, want %q", got, "gzip, zstd, br, identity")
 	}
 }
 
@@ -225,13 +208,15 @@ func TestUpstreamGetRequestContentEncoding(t *testing.T) {
 		requestCompression string
 		want               string
 	}{
-		{"empty defaults to none", "", ""},
+		{"empty defaults to zstd", "", "zstd"},
 		{"none", "none", ""},
 		{"identity", "identity", ""},
 		{"trim and lowercase", "  GZIP  ", "gzip"},
+		{"x-gzip alias", "x-gzip", "gzip"},
 		{"zstd", "zstd", "zstd"},
+		{"x-zstd alias", "x-zstd", "zstd"},
 		{"br", "br", "br"},
-		{"unknown ignored", "snappy", ""},
+		{"unknown defaults to zstd", "snappy", "zstd"},
 	}
 
 	for _, tt := range tests {

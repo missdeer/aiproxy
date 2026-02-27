@@ -32,6 +32,7 @@ upstreams:
     token: "sk-"
     weight: 10
     api_type: "anthropic"
+    request_compression: "zstd"
     enabled: false
     # Model name mappings for this upstream
     # Key: client model name, Value: upstream model name
@@ -58,6 +59,7 @@ upstreams:
     token: "sk-"
     weight: 5
     api_type: "anthropic"
+    request_compression: "gzip"
     model_mappings:
       "claude-haiku-4-5": "claude-haiku-4-5-20251001"
       "claude-opus-4-5": "claude-opus-4-5-20251101"
@@ -88,6 +90,7 @@ upstreams:
     token: "sk-"
     weight: 1
     api_type: "anthropic"
+    request_compression: "br"
     model_mappings:
       "claude-haiku-4-5": "claude-haiku-4-5-20251001"
       "claude-sonnet-4-5": "claude-sonnet-4-5-20250929"
@@ -100,6 +103,7 @@ upstreams:
     token: "sk-"
     weight: 1
     api_type: "anthropic"
+    request_compression: "none"
     model_mappings:
       "claude-opus-4-5-thinking": "gemini-claude-opus-4-5-thinking"
       "claude-sonnet-4-5": "gemini-claude-sonnet-4-5"
@@ -183,6 +187,7 @@ upstreams:
     weight: 5
     enabled: false
     api_type: "responses"  # Use native Responses API format (/v1/responses endpoint)
+    request_compression: "zstd"
     model_mappings:
       "gpt-4o": "gpt-4o-2024-11-20"
     available_models:
@@ -225,6 +230,7 @@ upstreams:
     weight: 5
     enabled: false
     api_type: "geminicli"  # Use Gemini CLI API format (OAuth, cloudcode-pa.googleapis.com)
+    request_compression: "gzip"
     # For OAuth-based upstreams, use auth_files instead of token
     auth_files:
       - "/path/to/geminicli-auth1.json"
@@ -267,4 +273,3 @@ upstreams:
     available_models:
       - "claude-opus-4-6"
       - "claude-sonnet-4-6"
-

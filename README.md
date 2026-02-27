@@ -17,6 +17,7 @@ Accepts requests in **Anthropic**, **OpenAI**, **Responses API**, or **Gemini** 
 - **Auth File Round-Robin** — Multiple auth files per upstream, rotated in round-robin fashion
 - **Streaming Support** — Full support for streaming responses across all protocols
 - **Upstream Must-Stream Fallback** — Force streaming-only upstreams while keeping non-stream client compatibility
+- **Outbound Request Compression** — Upstream request bodies use configurable `request_compression` (`zstd` default, `gzip`/`br`/`none` supported)
 - **Config Hot-Reload** — Config file changes are watched and applied without restart
 - **Rotating File Logging** — Optional file-based logging with automatic rotation by size/age
 
@@ -66,6 +67,7 @@ upstreams:
     token: "sk-ant-xxx"
     weight: 10
     api_type: "anthropic"
+    request_compression: "zstd"  # optional, default is zstd; set "none" to disable
     model_mappings:
       "claude-3-opus": "claude-3-opus-20240229"
       "claude-3-sonnet": "claude-3-sonnet-20240229"
@@ -77,6 +79,7 @@ upstreams:
   - name: "Gemini CLI"
     weight: 5
     api_type: "geminicli"
+    request_compression: "gzip"
     auth_files:
       - "/path/to/geminicli-auth1.json"
       - "/path/to/geminicli-auth2.json"
@@ -85,6 +88,12 @@ upstreams:
     available_models:
       - "gemini-3-pro"
 ```
+
+Compression behavior:
+
+- Upstream `Accept-Encoding` is fixed to `gzip, zstd, br, identity` (not configurable).
+- `request_compression` controls outbound request body `Content-Encoding`.
+- `request_compression` default is `zstd`; set to `none`/`identity` to send plain request bodies.
 
 ## Usage
 

@@ -12,17 +12,28 @@ import (
 func TestApplyAcceptEncoding(t *testing.T) {
 	tests := []struct {
 		name          string
-		compression   string
 		initialHeader string
+		upstream      config.Upstream
 		wantHeader    string
 	}{
-		{"zstd sets header", "zstd", "", "zstd"},
-		{"gzip sets header", "gzip", "", "gzip"},
-		{"br sets header", "br", "", "br"},
-		{"none deletes header", "none", "gzip", ""},
-		{"empty defaults to zstd", "", "", "zstd"},
-		{"unknown falls back to zstd", "snappy", "", "zstd"},
-		{"overrides existing client header", "gzip", "br", "gzip"},
+		{
+			name:          "sets fixed capabilities",
+			initialHeader: "",
+			upstream:      config.Upstream{Name: "test-upstream"},
+			wantHeader:    "gzip, zstd, br, identity",
+		},
+		{
+			name:          "stable across upstream values",
+			initialHeader: "",
+			upstream:      config.Upstream{Name: "test-upstream"},
+			wantHeader:    "gzip, zstd, br, identity",
+		},
+		{
+			name:          "overrides existing client header",
+			initialHeader: "br",
+			upstream:      config.Upstream{Name: "test-upstream"},
+			wantHeader:    "gzip, zstd, br, identity",
+		},
 	}
 
 	for _, tt := range tests {
@@ -31,10 +42,7 @@ func TestApplyAcceptEncoding(t *testing.T) {
 			if tt.initialHeader != "" {
 				req.Header.Set("Accept-Encoding", tt.initialHeader)
 			}
-			ApplyAcceptEncoding(req, config.Upstream{
-				Name:        "test-upstream",
-				Compression: tt.compression,
-			})
+			ApplyAcceptEncoding(req, tt.upstream)
 
 			got := req.Header.Get("Accept-Encoding")
 			if got != tt.wantHeader {
