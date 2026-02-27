@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,7 +96,7 @@ func TestDoHTTPRequest_RequestBodyCompressionFromUpstreamConfig(t *testing.T) {
 			}))
 			defer upstreamSrv.Close()
 
-			original := []byte(`{"input":"hello"}`)
+			original := []byte(`{"input":"` + strings.Repeat("hello-", 300) + `"}`)
 			originalReq := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			upstream := config.Upstream{
 				Name:               "test-upstream",
@@ -159,7 +160,7 @@ func TestDoHTTPRequestStream_RequestBodyCompressionFromUpstreamConfig(t *testing
 			}))
 			defer upstreamSrv.Close()
 
-			original := []byte(`{"input":"stream"}`)
+			original := []byte(`{"input":"` + strings.Repeat("stream-", 300) + `"}`)
 			originalReq := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			upstream := config.Upstream{
 				Name:               "test-upstream",

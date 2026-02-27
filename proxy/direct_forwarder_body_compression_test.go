@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,7 +53,7 @@ func TestForwardToCodex_RequestCompression(t *testing.T) {
 		AuthFiles:          []string{authFile},
 		RequestCompression: "gzip",
 	}
-	_, _, _, err := ForwardToCodex(client, upstream, []byte(`{"input":"hello","model":"codex-mini-latest"}`), true)
+	_, _, _, err := ForwardToCodex(client, upstream, []byte(`{"input":"`+strings.Repeat("hello-", 300)+`","model":"codex-mini-latest"}`), true)
 	if err != nil {
 		t.Fatalf("ForwardToCodex() error = %v", err)
 	}
@@ -107,7 +108,7 @@ func TestForwardToClaudeCode_RequestCompression(t *testing.T) {
 		AuthFiles:          []string{authFile},
 		RequestCompression: "gzip",
 	}
-	requestBody := []byte(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hello"}]}`)
+	requestBody := []byte(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"` + strings.Repeat("hello-", 300) + `"}]}`)
 	_, _, _, err := ForwardToClaudeCode(client, upstream, requestBody, false)
 	if err != nil {
 		t.Fatalf("ForwardToClaudeCode() error = %v", err)
@@ -167,7 +168,7 @@ func TestForwardToGeminiCLI_RequestCompression(t *testing.T) {
 		AuthFiles:          []string{authFile},
 		RequestCompression: "gzip",
 	}
-	_, _, _, err := ForwardToGeminiCLI(client, upstream, []byte(`{"input":"hello","model":"gemini-3-pro-preview"}`), true)
+	_, _, _, err := ForwardToGeminiCLI(client, upstream, []byte(`{"input":"`+strings.Repeat("hello-", 300)+`","model":"gemini-3-pro-preview"}`), true)
 	if err != nil {
 		t.Fatalf("ForwardToGeminiCLI() error = %v", err)
 	}
@@ -223,7 +224,7 @@ func TestForwardToAntigravity_RequestCompression(t *testing.T) {
 		AuthFiles:          []string{authFile},
 		RequestCompression: "gzip",
 	}
-	_, _, _, err := ForwardToAntigravity(client, upstream, []byte(`{"input":"hello","model":"gemini-2.5-flash"}`), true)
+	_, _, _, err := ForwardToAntigravity(client, upstream, []byte(`{"input":"`+strings.Repeat("hello-", 300)+`","model":"gemini-2.5-flash"}`), true)
 	if err != nil {
 		t.Fatalf("ForwardToAntigravity() error = %v", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/andybalholm/brotli"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestCompressBody_GzipRoundTrip(t *testing.T) {
-	original := []byte("Hello, world! This is a test of gzip compression.")
+	original := []byte(strings.Repeat("Hello, world! ", 200))
 	compressed, enc, err := CompressBody(original, "gzip")
 	if err != nil {
 		t.Fatalf("CompressBody gzip: %v", err)
@@ -35,7 +36,7 @@ func TestCompressBody_GzipRoundTrip(t *testing.T) {
 }
 
 func TestCompressBody_ZstdRoundTrip(t *testing.T) {
-	original := []byte("Hello, world! This is a test of zstd compression.")
+	original := []byte(strings.Repeat("Hello, world! ", 200))
 	compressed, enc, err := CompressBody(original, "zstd")
 	if err != nil {
 		t.Fatalf("CompressBody zstd: %v", err)
@@ -59,7 +60,7 @@ func TestCompressBody_ZstdRoundTrip(t *testing.T) {
 }
 
 func TestCompressBody_BrotliRoundTrip(t *testing.T) {
-	original := []byte("Hello, world! This is a test of brotli compression.")
+	original := []byte(strings.Repeat("Hello, world! ", 200))
 	compressed, enc, err := CompressBody(original, "br")
 	if err != nil {
 		t.Fatalf("CompressBody br: %v", err)
@@ -99,10 +100,12 @@ func TestCompressBody_EmptyBody(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CompressBody(%q, nil): %v", enc, err)
 		}
-		if retEnc == "" {
-			t.Fatalf("expected non-empty encoding for %q with nil body", enc)
+		if retEnc != "" {
+			t.Fatalf("expected empty encoding for %q with nil body fallback, got %q", enc, retEnc)
 		}
-		_ = compressed // compressed empty data is still valid
+		if len(compressed) != 0 {
+			t.Fatalf("expected empty body for nil input fallback, got %d bytes", len(compressed))
+		}
 	}
 }
 
