@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/missdeer/aiproxy/config"
+	"github.com/missdeer/aiproxy/middleware"
 	"github.com/missdeer/aiproxy/proxy"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
@@ -62,12 +63,12 @@ func main() {
 		defer cfgManager.StopWatching()
 	}
 
-	http.Handle("/v1/messages", anthropicHandler)
-	http.Handle("/v1/chat/completions", openaiHandler)
-	http.Handle("/v1/responses", responsesHandler)
-	http.Handle("/v1/responses/", responsesHandler)
-	http.Handle("/v1beta/models/", geminiHandler)
-	http.Handle("/v1/models/", geminiHandler)
+	http.Handle("/v1/messages", middleware.DecompressionMiddleware(anthropicHandler))
+	http.Handle("/v1/chat/completions", middleware.DecompressionMiddleware(openaiHandler))
+	http.Handle("/v1/responses", middleware.DecompressionMiddleware(responsesHandler))
+	http.Handle("/v1/responses/", middleware.DecompressionMiddleware(responsesHandler))
+	http.Handle("/v1beta/models/", middleware.DecompressionMiddleware(geminiHandler))
+	http.Handle("/v1/models/", middleware.DecompressionMiddleware(geminiHandler))
 
 	// Handle graceful shutdown
 	go func() {

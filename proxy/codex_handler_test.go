@@ -562,6 +562,14 @@ func TestForwardToCodex_InputStringConversion(t *testing.T) {
 		t.Fatalf("instructions = %q, want empty string", capturedBody["instructions"])
 	}
 
+	// Verify truncation and context_management are not present
+	if _, exists := capturedBody["truncation"]; exists {
+		t.Fatal("truncation field should be removed for Codex compatibility")
+	}
+	if _, exists := capturedBody["context_management"]; exists {
+		t.Fatal("context_management field should be removed for Codex compatibility")
+	}
+
 	// Since clientWantsStream=false, response should be assembled JSON
 	var resp map[string]any
 	if err := json.Unmarshal(respBody, &resp); err != nil {
@@ -620,6 +628,64 @@ func TestForwardToCodex_StreamingPassthrough(t *testing.T) {
 	// Should return raw SSE, not assembled JSON
 	if !bytes.Contains(respBody, []byte("response.output_text.delta")) {
 		t.Fatal("expected raw SSE data in response")
+	}
+}
+
+func TestForwardToCodex_StripsCompactFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	authFile := filepath.Join(tmpDir, "auth.json")
+
+	s := &CodexTokenStorage{
+		AccessToken:  "cached-access-token",
+		AccountID:    "acct-test",
+		RefreshToken: "ref",
+		Email:        "user@test.com",
+	}
+	data, _ := json.Marshal(s)
+	os.WriteFile(authFile, data, 0644)
+
+	codexAuthManager.StoreEntry(authFile, s, time.Now().Add(1*time.Hour), &http.Client{Timeout: 30 * time.Second})
+	defer codexAuthManager.DeleteEntry(authFile)
+
+	var capturedBody map[string]any
+
+	client := &http.Client{
+		Transport: &mockRoundTripper{
+			handler: func(req *http.Request) (*http.Response, error) {
+				bodyBytes, _ := io.ReadAll(req.Body)
+				json.Unmarshal(bodyBytes, &capturedBody)
+				sse := `data: {"type":"response.completed","response":{"id":"r1","model":"codex-mini"}}` + "\n"
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader([]byte(sse))),
+					Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				}, nil
+			},
+		},
+	}
+
+	upstream := config.Upstream{
+		Name:      "test-codex",
+		AuthFiles: []string{authFile},
+	}
+
+	requestBody := []byte(`{
+		"input":"test",
+		"model":"codex-mini-latest",
+		"truncation":"disabled",
+		"context_management":{"compaction":{"type":"compaction","compact_threshold":12000}}
+	}`)
+
+	_, _, _, err := ForwardToCodex(client, upstream, requestBody, false)
+	if err != nil {
+		t.Fatalf("ForwardToCodex() error = %v", err)
+	}
+
+	if _, exists := capturedBody["truncation"]; exists {
+		t.Fatal("truncation field should be removed for Codex compatibility")
+	}
+	if _, exists := capturedBody["context_management"]; exists {
+		t.Fatal("context_management field should be removed for Codex compatibility")
 	}
 }
 

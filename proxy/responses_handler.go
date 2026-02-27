@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -119,19 +120,33 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 
-	var req ResponsesRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	var bodyMap map[string]any
+	if err := json.Unmarshal(body, &bodyMap); err != nil {
+		// Write body to temp file for inspection
+		tmpFile, tmpErr := os.CreateTemp("", "aiproxy-invalid-body-*.bin")
+		tmpPath := ""
+		if tmpErr == nil {
+			tmpPath = tmpFile.Name()
+			tmpFile.Write(body)
+			tmpFile.Close()
+		}
 		log.Printf("[ERROR] Invalid JSON request: %v", err)
+		log.Printf("[ERROR] Request details: Method=%s, Path=%s, Content-Type=%s, Content-Length=%d",
+			r.Method, r.URL.Path, r.Header.Get("Content-Type"), len(body))
+		log.Printf("[ERROR] Body saved to: %s", tmpPath)
+		log.Printf("[ERROR] Body preview (first 200 bytes): %q", truncateString(string(body), 200))
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	// Extract prompt preview for logging
-	promptPreview := extractResponsesPromptPreview(req.Input)
-	endpoint := "/v1/responses" + pathSuffix
-	log.Printf("[RESPONSES REQUEST] Endpoint: %s, Model: %s, Stream: %v, Prompt: %s", endpoint, req.Model, req.Stream, promptPreview)
+	model, _ := bodyMap["model"].(string)
+	stream, _ := bodyMap["stream"].(bool)
 
-	originalModel := req.Model
+	promptPreview := extractResponsesPromptPreview(bodyMap["input"])
+	endpoint := "/v1/responses" + pathSuffix
+	log.Printf("[RESPONSES REQUEST] Endpoint: %s, Model: %s, Stream: %v, Prompt: %s", endpoint, model, stream, promptPreview)
+
+	originalModel := model
 
 	upstreams := h.balancer.GetAll()
 	if len(upstreams) == 0 {
@@ -181,7 +196,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[FORWARD] Upstream: %s, URL: %s, Model: %s -> %s, APIType: %s",
 			upstream.Name, upstream.BaseURL, originalModel, mappedModel, upstream.GetAPIType())
 
-		status, respBody, respHeaders, streamResp, err := h.forwardRequest(upstream, mappedModel, body, req.Stream, r, pathSuffix)
+		status, respBody, respHeaders, streamResp, err := h.forwardRequest(upstream, mappedModel, body, stream, r, pathSuffix)
 		if err != nil {
 			log.Printf("[ERROR] Upstream %s connection error: %v", upstream.Name, err)
 			if h.balancer.RecordFailure(upstream.Name, originalModel) {
@@ -243,7 +258,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(status)
 
-		if req.Stream {
+		if stream {
 			h.streamResponse(w, respBody)
 		} else {
 			w.Write(respBody)

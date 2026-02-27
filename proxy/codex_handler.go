@@ -138,6 +138,8 @@ func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody [
 	// Codex API always requires streaming
 	bodyMap["stream"] = true
 	bodyMap["store"] = false
+	delete(bodyMap, "truncation")
+	delete(bodyMap, "context_management")
 	// Codex requires instructions field
 	if _, ok := bodyMap["instructions"]; !ok {
 		bodyMap["instructions"] = ""
