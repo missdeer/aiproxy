@@ -140,6 +140,8 @@ func (h *AnthropicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			stripHopByHopHeaders(w.Header())
 			w.WriteHeader(status)
+			streamStart := time.Now()
+			log.Printf("[ANTHROPIC] stream_start upstream=%s status=%d (headers sent to client)", upstream.Name, status)
 
 			result := PipeStream(w, streamResp.Body)
 			switch {
@@ -154,7 +156,7 @@ func (h *AnthropicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[INFO] Upstream %s stream ended by client disconnect: %v", upstream.Name, result.DownstreamErr)
 			default:
 				h.balancer.RecordSuccess(upstream.Name, originalModel)
-				log.Printf("[SUCCESS] Upstream %s streaming completed (%d bytes)", upstream.Name, result.BytesWritten)
+				log.Printf("[SUCCESS] Upstream %s streaming completed (%d bytes, %s)", upstream.Name, result.BytesWritten, time.Since(streamStart))
 			}
 			return
 		}
