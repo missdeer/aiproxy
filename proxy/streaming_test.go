@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -601,6 +602,40 @@ func TestHandleStreamResponse_Error(t *testing.T) {
 	}
 }
 
+func TestHandleStreamResponse_ErrorReadFailure(t *testing.T) {
+	readErr := errors.New("read failed")
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Header: http.Header{
+			"Content-Type": {"application/json"},
+		},
+		Body: io.NopCloser(&failingReader{data: []byte("partial"), err: readErr}),
+	}
+
+	status, errBody, headers, streamResp, err := HandleStreamResponse(resp)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to read upstream error response body") {
+		t.Fatalf("error = %v, want wrapped read-body error", err)
+	}
+	if !errors.Is(err, readErr) {
+		t.Fatalf("error = %v, want wrapped %v", err, readErr)
+	}
+	if status != 0 {
+		t.Fatalf("status = %d, want 0", status)
+	}
+	if errBody != nil {
+		t.Fatalf("errBody = %q, want nil", errBody)
+	}
+	if headers != nil {
+		t.Fatal("headers should be nil on read failure")
+	}
+	if streamResp != nil {
+		t.Fatal("streamResp should be nil on read failure")
+	}
+}
+
 // ── StreamCapableSender type assertion tests ──────────────────────────
 
 func TestStreamCapableSender_TypeAssertions(t *testing.T) {
@@ -692,8 +727,8 @@ func testStreamingFastPathE2E(t *testing.T, label string, respFormat config.APIT
 	}
 	defer streamResp.Body.Close()
 
-	// Pipe to recorder in background, verify incremental delivery
-	rec := httptest.NewRecorder()
+	// Pipe to synchronized recorder in background, verify incremental delivery.
+	rec := newSyncResponseWriter()
 	pipeDone := make(chan PipeResult, 1)
 	go func() {
 		pipeDone <- PipeStream(rec, streamResp.Body)
@@ -702,11 +737,15 @@ func testStreamingFastPathE2E(t *testing.T, label string, respFormat config.APIT
 	// Wait for upstream to flush chunk 1
 	<-firstChunkFlushed
 
-	// Give PipeStream time to write chunk 1 to the recorder
-	time.Sleep(50 * time.Millisecond)
+	// Wait until downstream receives the first write.
+	select {
+	case <-rec.FirstWrite():
+	case <-time.After(1 * time.Second):
+		t.Fatalf("[%s] timeout waiting for first chunk at downstream", label)
+	}
 
 	// Verify chunk 1 arrived while upstream is still blocked on proceedToChunk2
-	body := rec.Body.String()
+	body := rec.BodyString()
 	if !strings.Contains(body, "chunk1") {
 		t.Fatalf("[%s] first chunk not received while upstream blocked, got %q", label, body)
 	}
@@ -721,7 +760,7 @@ func testStreamingFastPathE2E(t *testing.T, label string, respFormat config.APIT
 	}
 
 	// Verify all data arrived
-	allData := rec.Body.String()
+	allData := rec.BodyString()
 	expected := strings.Join(chunks, "")
 	if allData != expected {
 		t.Fatalf("[%s] body = %q, want %q", label, allData, expected)
@@ -772,6 +811,49 @@ func TestStreamingFastPath_NonTargetRemainBuffered(t *testing.T) {
 }
 
 // ── Test helpers ──────────────────────────────────────────────────────
+
+// syncResponseWriter is a thread-safe http.ResponseWriter used in tests that
+// need to observe partial stream writes while PipeStream is still running.
+type syncResponseWriter struct {
+	header         http.Header
+	mu             sync.Mutex
+	body           bytes.Buffer
+	firstWrite     chan struct{}
+	firstWriteOnce sync.Once
+}
+
+func newSyncResponseWriter() *syncResponseWriter {
+	return &syncResponseWriter{
+		header:     make(http.Header),
+		firstWrite: make(chan struct{}),
+	}
+}
+
+func (w *syncResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *syncResponseWriter) WriteHeader(int) {}
+
+func (w *syncResponseWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	n, err := w.body.Write(p)
+	w.mu.Unlock()
+	if n > 0 {
+		w.firstWriteOnce.Do(func() { close(w.firstWrite) })
+	}
+	return n, err
+}
+
+func (w *syncResponseWriter) FirstWrite() <-chan struct{} {
+	return w.firstWrite
+}
+
+func (w *syncResponseWriter) BodyString() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.String()
+}
 
 // failingReader returns data on first read, then error on next read.
 type failingReader struct {

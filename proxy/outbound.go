@@ -284,7 +284,10 @@ func (s *ClaudeCodeSender) SendStream(client *http.Client, upstream config.Upstr
 func HandleStreamResponse(resp *http.Response) (status int, errBody []byte, headers http.Header, streamResp *http.Response, err error) {
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return 0, nil, nil, nil, fmt.Errorf("failed to read upstream error response body: %w", readErr)
+		}
 		h := resp.Header.Clone()
 		stripHopByHopHeaders(h)
 		return resp.StatusCode, body, h, nil, nil
