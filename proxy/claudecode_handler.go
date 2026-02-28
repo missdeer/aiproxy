@@ -10,6 +10,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -103,12 +104,9 @@ func claudeCodeRefreshAndUpdate(client *http.Client, storage *ClaudeCodeTokenSto
 
 // ── ForwardToClaudeCode: called by other handlers' forwardRequest ──────────
 
-// ForwardToClaudeCode sends a request to the Claude Code upstream. The requestBody
-// must already be in Anthropic Messages API format (JSON). It returns the raw
-// response from Claude Code (which uses SSE streaming format).
-// The Claude Code API supports both streaming and non-streaming; when clientWantsStream is false,
-// the SSE output is reassembled into a single JSON response.
-func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
+// prepareClaudeCodeRequest handles auth, body modification, and HTTP request
+// construction for the Claude Code upstream.
+func prepareClaudeCodeRequest(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool, ctx context.Context) (*http.Request, error) {
 	// Get timeout from client
 	timeout := ClientResponseHeaderTimeout(client)
 
@@ -116,13 +114,13 @@ func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestB
 	accessToken, _, err := claudeCodeAuthManager.GetTokenWithRetry(
 		upstream.AuthFiles, upstream.AuthFileStartIndex(), timeout, "[CLAUDECODE]")
 	if err != nil {
-		return 0, nil, nil, fmt.Errorf("claudecode auth: %w", err)
+		return nil, fmt.Errorf("claudecode auth: %w", err)
 	}
 
 	// Parse request body to ensure stream field is set correctly
 	var bodyMap map[string]any
 	if err := json.Unmarshal(requestBody, &bodyMap); err != nil {
-		return 0, nil, nil, fmt.Errorf("parse request body: %w", err)
+		return nil, fmt.Errorf("parse request body: %w", err)
 	}
 
 	// Claude Code API supports both streaming and non-streaming
@@ -130,13 +128,13 @@ func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestB
 
 	modifiedBody, err := json.Marshal(bodyMap)
 	if err != nil {
-		return 0, nil, nil, err
+		return nil, err
 	}
 
 	apiURL := claudeCodeBaseURL + "/v1/messages?beta=true"
-	req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(modifiedBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(modifiedBody))
 	if err != nil {
-		return 0, nil, nil, err
+		return nil, err
 	}
 
 	// Set Claude Code-specific headers
@@ -156,7 +154,21 @@ func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestB
 	req.Header.Set("Connection", "keep-alive")
 	ApplyAcceptEncoding(req, upstream)
 	if _, err := ApplyBodyCompression(req, modifiedBody, upstream); err != nil {
-		return 0, nil, nil, fmt.Errorf("request body compression: %w", err)
+		return nil, fmt.Errorf("request body compression: %w", err)
+	}
+
+	return req, nil
+}
+
+// ForwardToClaudeCode sends a request to the Claude Code upstream. The requestBody
+// must already be in Anthropic Messages API format (JSON). It returns the raw
+// response from Claude Code (which uses SSE streaming format).
+// The Claude Code API supports both streaming and non-streaming; when clientWantsStream is false,
+// the SSE output is reassembled into a single JSON response.
+func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
+	req, err := prepareClaudeCodeRequest(client, upstream, requestBody, clientWantsStream, context.Background())
+	if err != nil {
+		return 0, nil, nil, err
 	}
 
 	resp, err := client.Do(req)
@@ -186,6 +198,17 @@ func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestB
 	}
 
 	return resp.StatusCode, respBody, headers, nil
+}
+
+// ForwardToClaudeCodeStream sends a streaming request to the Claude Code upstream
+// and returns the raw *http.Response with body unconsumed.
+// The caller is responsible for closing resp.Body.
+func ForwardToClaudeCodeStream(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Response, error) {
+	req, err := prepareClaudeCodeRequest(client, upstream, requestBody, true, ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.Do(req)
 }
 
 // claudeCodeSSEToJSON parses Claude Code SSE output and assembles a non-streaming JSON response.

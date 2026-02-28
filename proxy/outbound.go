@@ -19,6 +19,13 @@ type OutboundSender interface {
 	Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (status int, body []byte, headers http.Header, respFormat config.APIType, err error)
 }
 
+// StreamCapableSender is optionally implemented by senders that can return
+// an unread *http.Response for streaming passthrough. Handlers use type
+// assertion to check for this capability.
+type StreamCapableSender interface {
+	SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (resp *http.Response, respFormat config.APIType, err error)
+}
+
 // GetOutboundSender returns the appropriate OutboundSender for the given API type.
 func GetOutboundSender(apiType config.APIType) OutboundSender {
 	switch apiType {
@@ -162,6 +169,14 @@ func (s *CodexSender) Send(client *http.Client, upstream config.Upstream, canoni
 	return status, respBody, respHeaders, config.APITypeResponses, nil
 }
 
+func (s *CodexSender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
+	resp, err := ForwardToCodexStream(client, upstream, canonicalBody, originalReq.Context())
+	if err != nil {
+		return nil, "", err
+	}
+	return resp, config.APITypeResponses, nil
+}
+
 // ── GeminiCLISender ─────────────────────────────────────────────────────
 
 type GeminiCLISender struct{}
@@ -181,6 +196,14 @@ func (s *GeminiCLISender) Send(client *http.Client, upstream config.Upstream, ca
 	return status, respBody, respHeaders, respFormat, nil
 }
 
+func (s *GeminiCLISender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
+	resp, err := ForwardToGeminiCLIStream(client, upstream, canonicalBody, originalReq.Context())
+	if err != nil {
+		return nil, "", err
+	}
+	return resp, config.APITypeGemini, nil
+}
+
 // ── AntigravitySender ───────────────────────────────────────────────────
 
 type AntigravitySender struct{}
@@ -198,6 +221,14 @@ func (s *AntigravitySender) Send(client *http.Client, upstream config.Upstream, 
 		respFormat = config.APITypeGemini
 	}
 	return status, respBody, respHeaders, respFormat, nil
+}
+
+func (s *AntigravitySender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
+	resp, err := ForwardToAntigravityStream(client, upstream, canonicalBody, originalReq.Context())
+	if err != nil {
+		return nil, "", err
+	}
+	return resp, config.APITypeGemini, nil
 }
 
 // ── ClaudeCodeSender ────────────────────────────────────────────────────
@@ -225,7 +256,41 @@ func (s *ClaudeCodeSender) Send(client *http.Client, upstream config.Upstream, c
 	return status, respBody, respHeaders, config.APITypeAnthropic, nil
 }
 
+func (s *ClaudeCodeSender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
+	// Convert Responses format to Anthropic format for Claude Code
+	var bodyMap map[string]any
+	if err := json.Unmarshal(canonicalBody, &bodyMap); err != nil {
+		return nil, "", err
+	}
+
+	anthropicBody := convertResponsesToAnthropicRequest(bodyMap)
+	modifiedBody, err := json.Marshal(anthropicBody)
+	if err != nil {
+		return nil, "", err
+	}
+
+	resp, err := ForwardToClaudeCodeStream(client, upstream, modifiedBody, originalReq.Context())
+	if err != nil {
+		return nil, "", err
+	}
+	return resp, config.APITypeAnthropic, nil
+}
+
 // ── Shared HTTP helper ──────────────────────────────────────────────────
+
+// HandleStreamResponse processes a raw *http.Response for streaming passthrough.
+// On error status (>= 400), reads the body and returns buffered error response.
+// On success, returns the unread response for PipeStream passthrough.
+func HandleStreamResponse(resp *http.Response) (status int, errBody []byte, headers http.Header, streamResp *http.Response, err error) {
+	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		h := resp.Header.Clone()
+		stripHopByHopHeaders(h)
+		return resp.StatusCode, body, h, nil, nil
+	}
+	return resp.StatusCode, nil, nil, resp, nil
+}
 
 // doHTTPRequest builds and executes an HTTP POST request to the given URL
 // with appropriate authentication headers based on the API type.

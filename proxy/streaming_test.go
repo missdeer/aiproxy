@@ -529,6 +529,108 @@ func TestStreamingPassthrough_NonStreamingUnchanged(t *testing.T) {
 	}
 }
 
+// ── HandleStreamResponse tests ──────────────────────────────────────
+
+func TestHandleStreamResponse_Success(t *testing.T) {
+	// Verify that a 200 response is returned as a streamResp with body unconsumed.
+	body := "data: hello\n\ndata: world\n\n"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": {"text/event-stream"},
+		},
+		Body: io.NopCloser(strings.NewReader(body)),
+	}
+
+	status, errBody, headers, streamResp, err := HandleStreamResponse(resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if errBody != nil {
+		t.Fatalf("errBody should be nil, got %q", errBody)
+	}
+	if headers != nil {
+		t.Fatal("headers should be nil for success path")
+	}
+	if streamResp == nil {
+		t.Fatal("streamResp should not be nil")
+	}
+	defer streamResp.Body.Close()
+
+	// Body should be unconsumed and readable
+	got, _ := io.ReadAll(streamResp.Body)
+	if string(got) != body {
+		t.Fatalf("body = %q, want %q", string(got), body)
+	}
+}
+
+func TestHandleStreamResponse_Error(t *testing.T) {
+	// Verify that a 4xx response is buffered and returned as errBody.
+	errJSON := `{"error": "rate limited"}`
+	resp := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header: http.Header{
+			"Content-Type": {"application/json"},
+			"Connection":   {"keep-alive"},
+		},
+		Body: io.NopCloser(strings.NewReader(errJSON)),
+	}
+
+	status, errBody, headers, streamResp, err := HandleStreamResponse(resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", status, http.StatusTooManyRequests)
+	}
+	if string(errBody) != errJSON {
+		t.Fatalf("errBody = %q, want %q", errBody, errJSON)
+	}
+	if headers == nil {
+		t.Fatal("headers should not be nil for error path")
+	}
+	// Hop-by-hop headers should be stripped
+	if headers.Get("Connection") != "" {
+		t.Fatal("Connection header should be stripped")
+	}
+	if streamResp != nil {
+		t.Fatal("streamResp should be nil for error path")
+	}
+}
+
+// ── StreamCapableSender type assertion tests ──────────────────────────
+
+func TestStreamCapableSender_TypeAssertions(t *testing.T) {
+	// Verify that exactly the 4 target senders implement StreamCapableSender
+	// and the 4 non-target senders don't.
+	tests := []struct {
+		name     string
+		sender   OutboundSender
+		expected bool
+	}{
+		{"CodexSender", &CodexSender{}, true},
+		{"GeminiCLISender", &GeminiCLISender{}, true},
+		{"AntigravitySender", &AntigravitySender{}, true},
+		{"ClaudeCodeSender", &ClaudeCodeSender{}, true},
+		{"OpenAISender", &OpenAISender{}, false},
+		{"AnthropicSender", &AnthropicSender{}, false},
+		{"GeminiSender", &GeminiSender{}, false},
+		{"ResponsesSender", &ResponsesSender{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := tt.sender.(StreamCapableSender)
+			if ok != tt.expected {
+				t.Fatalf("StreamCapableSender type assertion = %v, want %v", ok, tt.expected)
+			}
+		})
+	}
+}
+
 // ── Test helpers ──────────────────────────────────────────────────────
 
 // failingReader returns data on first read, then error on next read.

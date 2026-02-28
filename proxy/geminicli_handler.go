@@ -10,6 +10,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -152,12 +153,9 @@ func geminiCLIRefreshAndUpdate(client *http.Client, storage *GeminiCLITokenStora
 
 // ── ForwardToGeminiCLI: called by other handlers' forwardRequest ──────────
 
-// ForwardToGeminiCLI sends a request to the Gemini CLI upstream. The requestBody
-// must already be in Responses API format (JSON). It returns the raw
-// response from Gemini CLI (which uses SSE streaming format).
-// The Gemini CLI API always uses SSE streaming; when clientWantsStream is false,
-// the SSE output is reassembled into a single Responses-format JSON response.
-func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
+// prepareGeminiCLIRequest handles auth, body conversion to Gemini format,
+// and HTTP request construction for the Gemini CLI upstream.
+func prepareGeminiCLIRequest(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Request, error) {
 	// Get timeout from client
 	timeout := ClientResponseHeaderTimeout(client)
 
@@ -165,17 +163,17 @@ func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBo
 	accessToken, storage, err := geminiCLIAuthManager.GetTokenWithRetry(
 		upstream.AuthFiles, upstream.AuthFileStartIndex(), timeout, "[GEMINICLI]")
 	if err != nil {
-		return 0, nil, nil, fmt.Errorf("geminicli auth: %w", err)
+		return nil, fmt.Errorf("geminicli auth: %w", err)
 	}
 
 	if storage.ProjectID == "" {
-		return 0, nil, nil, fmt.Errorf("project_id is empty for upstream %s", upstream.Name)
+		return nil, fmt.Errorf("project_id is empty for upstream %s", upstream.Name)
 	}
 
 	// Parse request body to extract model and input
 	var bodyMap map[string]any
 	if err := json.Unmarshal(requestBody, &bodyMap); err != nil {
-		return 0, nil, nil, fmt.Errorf("parse request body: %w", err)
+		return nil, fmt.Errorf("parse request body: %w", err)
 	}
 
 	model, _ := bodyMap["model"].(string)
@@ -239,9 +237,9 @@ func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBo
 	reqBody, _ := json.Marshal(payload)
 
 	apiURL := geminiCLIBase + geminiCLIPath + "?alt=sse"
-	req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(reqBody))
 	if err != nil {
-		return 0, nil, nil, err
+		return nil, err
 	}
 
 	// Set Gemini CLI-specific headers
@@ -253,7 +251,21 @@ func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBo
 	req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
 	ApplyAcceptEncoding(req, upstream)
 	if _, err := ApplyBodyCompression(req, reqBody, upstream); err != nil {
-		return 0, nil, nil, fmt.Errorf("request body compression: %w", err)
+		return nil, fmt.Errorf("request body compression: %w", err)
+	}
+
+	return req, nil
+}
+
+// ForwardToGeminiCLI sends a request to the Gemini CLI upstream. The requestBody
+// must already be in Responses API format (JSON). It returns the raw
+// response from Gemini CLI (which uses SSE streaming format).
+// The Gemini CLI API always uses SSE streaming; when clientWantsStream is false,
+// the SSE output is reassembled into a single Responses-format JSON response.
+func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
+	req, err := prepareGeminiCLIRequest(client, upstream, requestBody, context.Background())
+	if err != nil {
+		return 0, nil, nil, err
 	}
 
 	resp, err := client.Do(req)
@@ -283,6 +295,17 @@ func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBo
 	}
 
 	return resp.StatusCode, respBody, headers, nil
+}
+
+// ForwardToGeminiCLIStream sends a streaming request to the Gemini CLI upstream
+// and returns the raw *http.Response with body unconsumed.
+// The caller is responsible for closing resp.Body.
+func ForwardToGeminiCLIStream(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Response, error) {
+	req, err := prepareGeminiCLIRequest(client, upstream, requestBody, ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.Do(req)
 }
 
 // geminiCLISSEToResponsesJSON parses Gemini CLI SSE output and assembles a non-streaming

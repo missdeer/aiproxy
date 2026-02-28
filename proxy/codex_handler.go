@@ -12,6 +12,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -114,12 +115,10 @@ func codexRefreshAndUpdate(client *http.Client, storage *CodexTokenStorage, auth
 
 // ── ForwardToCodex: called by other handlers' forwardRequest ──────────
 
-// ForwardToCodex sends a request to the Codex upstream. The requestBody
-// must already be in Responses API format (JSON). It returns the raw
-// response from Codex (which uses Responses API SSE streaming format).
-// The Codex API always uses SSE streaming; when clientWantsStream is false,
-// the SSE output is reassembled into a single Responses-format JSON response.
-func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
+// prepareCodexRequest handles auth, body modification, and HTTP request
+// construction for the Codex upstream. The returned *http.Request is ready
+// to be executed by client.Do.
+func prepareCodexRequest(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Request, error) {
 	// Get timeout from client
 	timeout := ClientResponseHeaderTimeout(client)
 
@@ -127,13 +126,13 @@ func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody [
 	accessToken, storage, err := codexAuthManager.GetTokenWithRetry(
 		upstream.AuthFiles, upstream.AuthFileStartIndex(), timeout, "[CODEX]")
 	if err != nil {
-		return 0, nil, nil, fmt.Errorf("codex auth: %w", err)
+		return nil, fmt.Errorf("codex auth: %w", err)
 	}
 
 	// Ensure required fields for Codex API
 	var bodyMap map[string]any
 	if err := json.Unmarshal(requestBody, &bodyMap); err != nil {
-		return 0, nil, nil, fmt.Errorf("parse request body: %w", err)
+		return nil, fmt.Errorf("parse request body: %w", err)
 	}
 	// Codex API always requires streaming
 	bodyMap["stream"] = true
@@ -152,13 +151,13 @@ func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody [
 	}
 	modifiedBody, err := json.Marshal(bodyMap)
 	if err != nil {
-		return 0, nil, nil, err
+		return nil, err
 	}
 
 	apiURL := codexBaseURL + "/responses"
-	req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(modifiedBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(modifiedBody))
 	if err != nil {
-		return 0, nil, nil, err
+		return nil, err
 	}
 
 	// Set Codex-specific headers
@@ -174,7 +173,21 @@ func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody [
 	}
 	ApplyAcceptEncoding(req, upstream)
 	if _, err := ApplyBodyCompression(req, modifiedBody, upstream); err != nil {
-		return 0, nil, nil, fmt.Errorf("request body compression: %w", err)
+		return nil, fmt.Errorf("request body compression: %w", err)
+	}
+
+	return req, nil
+}
+
+// ForwardToCodex sends a request to the Codex upstream. The requestBody
+// must already be in Responses API format (JSON). It returns the raw
+// response from Codex (which uses Responses API SSE streaming format).
+// The Codex API always uses SSE streaming; when clientWantsStream is false,
+// the SSE output is reassembled into a single Responses-format JSON response.
+func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
+	req, err := prepareCodexRequest(client, upstream, requestBody, context.Background())
+	if err != nil {
+		return 0, nil, nil, err
 	}
 
 	resp, err := client.Do(req)
@@ -204,6 +217,17 @@ func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody [
 	}
 
 	return resp.StatusCode, respBody, headers, nil
+}
+
+// ForwardToCodexStream sends a streaming request to the Codex upstream
+// and returns the raw *http.Response with body unconsumed.
+// The caller is responsible for closing resp.Body.
+func ForwardToCodexStream(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Response, error) {
+	req, err := prepareCodexRequest(client, upstream, requestBody, ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.Do(req)
 }
 
 // codexSSEToResponsesJSON parses Codex SSE output and assembles a non-streaming

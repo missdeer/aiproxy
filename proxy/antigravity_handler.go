@@ -10,6 +10,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -116,12 +117,9 @@ func antigravityRefreshAndUpdate(client *http.Client, storage *AntigravityTokenS
 
 // ── ForwardToAntigravity: called by other handlers' forwardRequest ──────────
 
-// ForwardToAntigravity sends a request to the Antigravity upstream. The requestBody
-// must already be in Responses API format (JSON). It returns the raw
-// response from Antigravity (which uses SSE streaming format).
-// The Antigravity API always uses SSE streaming; when clientWantsStream is false,
-// the SSE output is reassembled into a single Responses-format JSON response.
-func ForwardToAntigravity(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
+// prepareAntigravityRequest handles auth, body conversion to Gemini/Antigravity format,
+// and HTTP request construction for the Antigravity upstream.
+func prepareAntigravityRequest(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Request, error) {
 	// Get timeout from client
 	timeout := ClientResponseHeaderTimeout(client)
 
@@ -129,17 +127,17 @@ func ForwardToAntigravity(client *http.Client, upstream config.Upstream, request
 	accessToken, storage, err := antigravityAuthManager.GetTokenWithRetry(
 		upstream.AuthFiles, upstream.AuthFileStartIndex(), timeout, "[ANTIGRAVITY]")
 	if err != nil {
-		return 0, nil, nil, fmt.Errorf("antigravity auth: %w", err)
+		return nil, fmt.Errorf("antigravity auth: %w", err)
 	}
 
 	if storage.ProjectID == "" {
-		return 0, nil, nil, fmt.Errorf("project_id is empty for upstream %s", upstream.Name)
+		return nil, fmt.Errorf("project_id is empty for upstream %s", upstream.Name)
 	}
 
 	// Parse request body to extract model and input
 	var bodyMap map[string]any
 	if err := json.Unmarshal(requestBody, &bodyMap); err != nil {
-		return 0, nil, nil, fmt.Errorf("parse request body: %w", err)
+		return nil, fmt.Errorf("parse request body: %w", err)
 	}
 
 	model, _ := bodyMap["model"].(string)
@@ -209,9 +207,9 @@ func ForwardToAntigravity(client *http.Client, upstream config.Upstream, request
 	reqBody, _ := json.Marshal(payload)
 
 	apiURL := antigravityBase + antigravityStreamPath + "?alt=sse"
-	req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(reqBody))
 	if err != nil {
-		return 0, nil, nil, err
+		return nil, err
 	}
 
 	// Set Antigravity-specific headers
@@ -221,7 +219,21 @@ func ForwardToAntigravity(client *http.Client, upstream config.Upstream, request
 	req.Header.Set("User-Agent", upstreammeta.UserAgentAntigravity)
 	ApplyAcceptEncoding(req, upstream)
 	if _, err := ApplyBodyCompression(req, reqBody, upstream); err != nil {
-		return 0, nil, nil, fmt.Errorf("request body compression: %w", err)
+		return nil, fmt.Errorf("request body compression: %w", err)
+	}
+
+	return req, nil
+}
+
+// ForwardToAntigravity sends a request to the Antigravity upstream. The requestBody
+// must already be in Responses API format (JSON). It returns the raw
+// response from Antigravity (which uses SSE streaming format).
+// The Antigravity API always uses SSE streaming; when clientWantsStream is false,
+// the SSE output is reassembled into a single Responses-format JSON response.
+func ForwardToAntigravity(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
+	req, err := prepareAntigravityRequest(client, upstream, requestBody, context.Background())
+	if err != nil {
+		return 0, nil, nil, err
 	}
 
 	resp, err := client.Do(req)
@@ -251,6 +263,17 @@ func ForwardToAntigravity(client *http.Client, upstream config.Upstream, request
 	}
 
 	return resp.StatusCode, respBody, headers, nil
+}
+
+// ForwardToAntigravityStream sends a streaming request to the Antigravity upstream
+// and returns the raw *http.Response with body unconsumed.
+// The caller is responsible for closing resp.Body.
+func ForwardToAntigravityStream(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Response, error) {
+	req, err := prepareAntigravityRequest(client, upstream, requestBody, ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.Do(req)
 }
 
 // antigravitySSEToResponsesJSON parses Antigravity SSE output and assembles a non-streaming

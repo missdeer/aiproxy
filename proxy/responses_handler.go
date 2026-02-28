@@ -317,6 +317,42 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 
 	// Send via OutboundSender
 	sender := GetOutboundSender(apiType)
+
+	// Streaming fast path: if sender supports SendStream and client wants streaming,
+	// try to get the raw response for PipeStream passthrough.
+	if clientWantsStream {
+		if streamSender, ok := sender.(StreamCapableSender); ok {
+			resp, respFormat, err := streamSender.SendStream(h.client, upstream, canonicalBytes, originalReq)
+			if err != nil {
+				return 0, nil, nil, nil, err
+			}
+			// Only use fast path if response format matches the client's protocol
+			if respFormat == config.APITypeResponses {
+				return HandleStreamResponse(resp)
+			}
+			// Format mismatch: read body and fall through to conversion path
+			defer resp.Body.Close()
+			respBody, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				return 0, nil, nil, nil, readErr
+			}
+			headers := resp.Header.Clone()
+			StripHopByHopHeaders(headers)
+			headers.Del("Content-Length")
+			headers.Del("Content-Encoding")
+			if resp.StatusCode >= 400 {
+				return resp.StatusCode, respBody, headers, nil, nil
+			}
+			// Fall through to convert stream response
+			responsesResp, convErr := h.convertStreamToResponses(bytes.NewReader(respBody), true, respFormat)
+			if convErr != nil {
+				return 0, nil, nil, nil, fmt.Errorf("failed to convert stream response: %w", convErr)
+			}
+			headers.Set("Content-Type", "text/event-stream")
+			return resp.StatusCode, responsesResp, headers, nil, nil
+		}
+	}
+
 	status, respBody, respHeaders, respFormat, err := sender.Send(h.client, upstream, canonicalBytes, clientWantsStream, originalReq)
 	if err != nil {
 		return status, nil, nil, nil, err
