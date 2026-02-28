@@ -631,6 +631,146 @@ func TestStreamCapableSender_TypeAssertions(t *testing.T) {
 	}
 }
 
+// ── E2E streaming fast path tests ─────────────────────────────────────
+// These tests verify the full HandleStreamResponse → PipeStream chain
+// delivers chunks incrementally, proving true streaming passthrough.
+// Each test simulates a format-compatible upstream using channel
+// synchronization (same pattern as TestStreamingPassthrough_OpenAI)
+// to prove the first chunk arrives while the upstream is still blocked.
+
+func testStreamingFastPathE2E(t *testing.T, label string, respFormat config.APIType) {
+	t.Helper()
+
+	chunks := []string{
+		"data: {\"type\":\"chunk1\"}\n\n",
+		"data: {\"type\":\"chunk2\"}\n\n",
+		"data: [DONE]\n\n",
+	}
+	firstChunkFlushed := make(chan struct{})
+	proceedToChunk2 := make(chan struct{})
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+
+		flusher, _ := w.(http.Flusher)
+		w.Write([]byte(chunks[0]))
+		flusher.Flush()
+		close(firstChunkFlushed)
+
+		<-proceedToChunk2
+
+		for _, chunk := range chunks[1:] {
+			w.Write([]byte(chunk))
+			flusher.Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	// Simulate the handler's fast path: SendStream → HandleStreamResponse → PipeStream
+	originalReq := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader("{}"))
+	resp, err := doHTTPRequestStream(upstream.Client(), upstream.URL, []byte(`{}`),
+		config.Upstream{Token: "test"}, respFormat, originalReq, "")
+	if err != nil {
+		t.Fatalf("[%s] doHTTPRequestStream error: %v", label, err)
+	}
+
+	// HandleStreamResponse: should return streamResp for PipeStream
+	status, errBody, _, streamResp, handleErr := HandleStreamResponse(resp)
+	if handleErr != nil {
+		t.Fatalf("[%s] HandleStreamResponse error: %v", label, handleErr)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("[%s] status = %d, want 200", label, status)
+	}
+	if errBody != nil {
+		t.Fatalf("[%s] errBody should be nil", label)
+	}
+	if streamResp == nil {
+		t.Fatalf("[%s] streamResp should not be nil", label)
+	}
+	defer streamResp.Body.Close()
+
+	// Pipe to recorder in background, verify incremental delivery
+	rec := httptest.NewRecorder()
+	pipeDone := make(chan PipeResult, 1)
+	go func() {
+		pipeDone <- PipeStream(rec, streamResp.Body)
+	}()
+
+	// Wait for upstream to flush chunk 1
+	<-firstChunkFlushed
+
+	// Give PipeStream time to write chunk 1 to the recorder
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify chunk 1 arrived while upstream is still blocked on proceedToChunk2
+	body := rec.Body.String()
+	if !strings.Contains(body, "chunk1") {
+		t.Fatalf("[%s] first chunk not received while upstream blocked, got %q", label, body)
+	}
+
+	// Unblock upstream
+	close(proceedToChunk2)
+
+	// Wait for PipeStream to complete
+	result := <-pipeDone
+	if !result.OK() {
+		t.Fatalf("[%s] PipeStream failed: upstream=%v downstream=%v", label, result.UpstreamErr, result.DownstreamErr)
+	}
+
+	// Verify all data arrived
+	allData := rec.Body.String()
+	expected := strings.Join(chunks, "")
+	if allData != expected {
+		t.Fatalf("[%s] body = %q, want %q", label, allData, expected)
+	}
+}
+
+func TestStreamingFastPath_Codex(t *testing.T) {
+	// Responses → Codex: response format is APITypeResponses
+	testStreamingFastPathE2E(t, "Responses→Codex", config.APITypeResponses)
+}
+
+func TestStreamingFastPath_GeminiCLI(t *testing.T) {
+	// Gemini → GeminiCLI: response format is APITypeGemini
+	testStreamingFastPathE2E(t, "Gemini→GeminiCLI", config.APITypeGemini)
+}
+
+func TestStreamingFastPath_Antigravity(t *testing.T) {
+	// Gemini → Antigravity: response format is APITypeGemini
+	testStreamingFastPathE2E(t, "Gemini→Antigravity", config.APITypeGemini)
+}
+
+func TestStreamingFastPath_ClaudeCode(t *testing.T) {
+	// Anthropic → ClaudeCode: response format is APITypeAnthropic
+	testStreamingFastPathE2E(t, "Anthropic→ClaudeCode", config.APITypeAnthropic)
+}
+
+// ── Non-target regression test ────────────────────────────────────────
+
+func TestStreamingFastPath_NonTargetRemainBuffered(t *testing.T) {
+	// Verify that non-target senders (OpenAI, Anthropic, Gemini, Responses)
+	// do NOT implement StreamCapableSender, so their streaming paths remain
+	// buffered through sender.Send(). This is a regression guard.
+	nonTargetTypes := []config.APIType{
+		config.APITypeOpenAI,
+		config.APITypeAnthropic,
+		config.APITypeGemini,
+		config.APITypeResponses,
+	}
+
+	for _, apiType := range nonTargetTypes {
+		t.Run(string(apiType), func(t *testing.T) {
+			sender := GetOutboundSender(apiType)
+			if _, ok := sender.(StreamCapableSender); ok {
+				t.Fatalf("sender for %s should NOT implement StreamCapableSender (would break buffered conversion)", apiType)
+			}
+		})
+	}
+}
+
 // ── Test helpers ──────────────────────────────────────────────────────
 
 // failingReader returns data on first read, then error on next read.

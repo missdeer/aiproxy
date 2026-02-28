@@ -350,9 +350,11 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 			}
 			// Only use fast path if response format matches the client's protocol
 			if respFormat == config.APITypeGemini {
+				log.Printf("[GEMINI] stream_mode=format_compatible_passthrough upstream=%s", upstream.Name)
 				return HandleStreamResponse(resp)
 			}
 			// Format mismatch: read body and fall through to conversion path
+			log.Printf("[GEMINI] stream_mode=buffered_conversion upstream=%s respFormat=%s", upstream.Name, respFormat)
 			defer resp.Body.Close()
 			respBody, readErr := io.ReadAll(resp.Body)
 			if readErr != nil {
