@@ -23,6 +23,16 @@ log:
   max_age: 28           # Max days to retain old files (default: 28)
   compress: false       # Compress rotated files with gzip (default: false)
 
+model_fallback:
+  "claude-opus-4-6": "claude-opus-4-5"
+  "claude-opus-4-5": "claude-sonnet-4-6"
+  "claude-sonnet-4-6": "claude-sonnet-4-5"
+  "claude-sonnet-4-5": "claude-haiku-4-5"
+  "gpt-5.3-codex": "gpt-5.2-codex"
+  "gpt-5.2-codex": "gpt-5.2"
+  "gpt-5.2": "gpt-5.1-codex"
+  "gpt-5.1-codex": "gpt-5.1"
+
 # Upstream services configuration
 # Requests are load-balanced using weighted round-robin
 # On 4xx/5xx errors, the next upstream is automatically tried
@@ -70,20 +80,6 @@ upstreams:
       - "claude-sonnet-4-5"
       - "claude-sonnet-4-5-thinking"
       - "claude-opus-4-5"
-
-  - name: "Nyxar API"
-    base_url: "https://api.nyxar.org"
-    token: "sk-"
-    weight: 5
-    api_type: "anthropic"
-    model_mappings:
-      "claude-haiku-4-5": "claude-haiku-4-5-20251001"
-      "claude-opus-4-5": "claude-opus-4-5-20251101"
-      "claude-sonnet-4-5": "claude-sonnet-4-5-20250929"
-    available_models:
-      - "claude-haiku-4-5"
-      - "claude-sonnet-4-5"
-      - "claude-opus-4-5"
       
   - name: "Huan API"
     base_url: "https://ai.huan666.de"
@@ -109,16 +105,6 @@ upstreams:
       "claude-sonnet-4-5": "gemini-claude-sonnet-4-5"
     available_models:
       - "claude-opus-4-5-thinking"
-      - "claude-sonnet-4-5"
-      
-  - name: "鸢北的公益站"
-    base_url: "https://api.nlvps.hidns.co"
-    token: "sk-"
-    weight: 10
-    api_type: "anthropic"
-    model_mappings:
-      "claude-sonnet-4-5": "claude-sonnet-4-5-20250929"
-    available_models:
       - "claude-sonnet-4-5"
                   
   - name: "黑与白"
