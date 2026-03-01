@@ -38,6 +38,8 @@ proxy/codex_handler.go       # Codex OAuth upstream (Forward function)
 proxy/claudecode_handler.go  # Claude Code OAuth upstream (Forward function)
 proxy/geminicli_handler.go   # Gemini CLI OAuth upstream (Forward function)
 proxy/antigravity_handler.go # Antigravity OAuth upstream (Forward function)
+proxy/kiro_handler.go        # Kiro (AWS CodeWhisperer/AmazonQ) OAuth upstream (Forward function)
+proxy/kiro_eventstream.go    # AWS Event Stream binary frame parser with CRC32 validation
 oauthcache/                  # Generic OAuth token cache with auto-refresh
 upstreammeta/                # Upstream metadata (User-Agent strings)
 ```
@@ -63,13 +65,13 @@ See `config.example.yaml` for full example. Key fields:
   - `token`: Authentication token (API key-based upstreams)
   - `auth_files`: OAuth auth file paths (OAuth-based upstreams, round-robin)
   - `weight`: Load balancing weight
-  - `api_type`: Protocol type (`anthropic`, `openai`, `gemini`, `responses`, `codex`, `geminicli`, `antigravity`, `claudecode`)
+  - `api_type`: Protocol type (`anthropic`, `openai`, `gemini`, `responses`, `codex`, `geminicli`, `antigravity`, `claudecode`, `kiro`)
   - `model_mappings`: Map client model names to upstream model names
   - `available_models`: List of client model names this upstream supports (optional)
 
 ## Features
 
-- **Multi-protocol support**: 8 upstream API types with automatic protocol translation
+- **Multi-protocol support**: 9 upstream API types with automatic protocol translation
 - **Per-upstream model mapping**: Each upstream can map client model names to its own model names
 - **Model filtering**: Only route requests to upstreams that support the requested model
 - **Circuit breaker**: Upstream marked unavailable after 3 consecutive failures per model, auto-recovers after 30 minutes

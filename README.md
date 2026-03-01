@@ -6,7 +6,7 @@ Accepts requests in **Anthropic**, **OpenAI**, **Responses API**, or **Gemini** 
 
 ## Features
 
-- **Multi-Protocol Support** — 8 upstream API types: Anthropic, OpenAI, Gemini, Responses, Codex, Gemini CLI, Antigravity, Claude Code
+- **Multi-Protocol Support** — 9 upstream API types: Anthropic, OpenAI, Gemini, Responses, Codex, Gemini CLI, Antigravity, Claude Code, Kiro
 - **Automatic Protocol Translation** — Clients speak one API format; the proxy translates to each upstream's native format
 - **Weighted Round-Robin Load Balancing** — Distribute requests across multiple upstream services based on configured weights
 - **Per-Upstream Model Mapping** — Each upstream can map client model names to its own model names
@@ -34,6 +34,7 @@ Accepts requests in **Anthropic**, **OpenAI**, **Responses API**, or **Gemini** 
 | `geminicli` | Gemini CLI | OAuth (`auth_files`) | `cloudcode-pa.googleapis.com` |
 | `antigravity` | Antigravity | OAuth (`auth_files`) | `daily-cloudcode-pa.googleapis.com` |
 | `claudecode` | Claude Code | OAuth (`auth_files`) | `api.anthropic.com` |
+| `kiro` | Kiro (AWS CodeWhisperer/AmazonQ) | OAuth (`auth_files`) | `codewhisperer/q.amazonaws.com` |
 
 ## Installation
 
@@ -76,7 +77,7 @@ upstreams:
       - "claude-3-opus"
       - "claude-3-sonnet"
 
-  # OAuth-based upstream (Gemini CLI / Antigravity / Codex / Claude Code)
+  # OAuth-based upstream (Gemini CLI / Antigravity / Codex / Claude Code / Kiro)
   - name: "Gemini CLI"
     weight: 5
     api_type: "geminicli"
