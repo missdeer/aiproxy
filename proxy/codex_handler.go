@@ -36,7 +36,7 @@ const (
 	codexClientID     = "app_EMoamEEZ73f0CkXaXp7hrann"
 	codexRefreshScope = "openid profile email"
 	codexBaseURL      = "https://chatgpt.com/backend-api/codex"
-	codexVersion      = "0.105.0"
+	codexVersion      = "0.106.0"
 )
 
 // ── Data structures ────────────────────────────────────────────────────
