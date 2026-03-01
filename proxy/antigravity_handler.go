@@ -215,93 +215,26 @@ func ForwardToAntigravity(client *http.Client, upstream config.Upstream, request
 	if err != nil {
 		return 0, nil, nil, err
 	}
-
-	attempts, err := iterAuthFiles(upstream)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-
-	timeout := ClientResponseHeaderTimeout(client)
-	var lastErr error
-	var lastStatus int
-	var lastBody []byte
-	var lastHeaders http.Header
-
-	for i, attempt := range attempts {
-		token, storage, err := antigravityAuthManager.GetToken(attempt.AuthFile, timeout)
-		if err != nil {
-			log.Printf("[ANTIGRAVITY] Auth file %s (%d/%d): %v", attempt.AuthFile, i+1, len(attempts), err)
-			lastErr = err
-			continue
-		}
-
-		if storage.ProjectID == "" {
-			log.Printf("[ANTIGRAVITY] Auth file %s (%d/%d): project_id is empty", attempt.AuthFile, i+1, len(attempts))
-			lastErr = fmt.Errorf("project_id is empty for auth file %s", attempt.AuthFile)
-			continue
-		}
-
-		payload := clonePayload(basePayload)
-		payload["project"] = storage.ProjectID
-		payload["requestId"] = "agent-" + uuid.NewString()
-
-		body, err := json.Marshal(payload)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		req, err := buildAntigravityRequest(upstream, body, token, context.Background())
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[ANTIGRAVITY] Auth file %s (%d/%d): request failed: %v", attempt.AuthFile, i+1, len(attempts), err)
-			lastErr = err
-			lastStatus = http.StatusBadGateway
-			continue
-		}
-
-		respBody, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			lastErr = err
-			lastStatus = http.StatusBadGateway
-			continue
-		}
-
-		headers := resp.Header.Clone()
-		StripHopByHopHeaders(headers)
-		headers.Del("Content-Length")
-		headers.Del("Content-Encoding")
-
-		if resp.StatusCode >= 400 {
-			log.Printf("[ANTIGRAVITY] Auth file %s (%d/%d): HTTP %d", attempt.AuthFile, i+1, len(attempts), resp.StatusCode)
-			lastErr = fmt.Errorf("upstream returned status %d", resp.StatusCode)
-			lastStatus = resp.StatusCode
-			lastBody = respBody
-			lastHeaders = headers
-			continue
-		}
-
-		if !clientWantsStream {
-			jsonResp, err := antigravitySSEToResponsesJSON(respBody)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("antigravity SSE conversion: %w", err)
+	return forwardWithAuthRetry(authRetryConfig[AntigravityTokenStorage]{
+		Label:   "[ANTIGRAVITY]",
+		Manager: antigravityAuthManager,
+		Validate: func(storage *AntigravityTokenStorage, authFile string) error {
+			if storage.ProjectID == "" {
+				return fmt.Errorf("project_id is empty for auth file %s", authFile)
 			}
-			headers.Set("Content-Type", "application/json")
-			return resp.StatusCode, jsonResp, headers, nil
-		}
-		return resp.StatusCode, respBody, headers, nil
-	}
-
-	if lastBody != nil {
-		return lastStatus, lastBody, lastHeaders, nil
-	}
-	return lastStatus, nil, nil, lastErr
+			return nil
+		},
+		MarshalBody: func(base map[string]any, storage *AntigravityTokenStorage) ([]byte, error) {
+			payload := clonePayload(base)
+			payload["project"] = storage.ProjectID
+			payload["requestId"] = "agent-" + uuid.NewString()
+			return json.Marshal(payload)
+		},
+		BuildReq: func(u config.Upstream, body []byte, token string, _ *AntigravityTokenStorage, ctx context.Context) (*http.Request, error) {
+			return buildAntigravityRequest(u, body, token, ctx)
+		},
+		ConvertSSE: antigravitySSEToResponsesJSON,
+	}, client, upstream, basePayload, clientWantsStream)
 }
 
 // ForwardToAntigravityStream sends a streaming request to the Antigravity upstream
@@ -312,74 +245,25 @@ func ForwardToAntigravityStream(client *http.Client, upstream config.Upstream, r
 	if err != nil {
 		return nil, err
 	}
-
-	attempts, err := iterAuthFiles(upstream)
-	if err != nil {
-		return nil, err
-	}
-
-	timeout := ClientResponseHeaderTimeout(client)
-	var lastErr error
-	var lastResp *http.Response
-
-	for i, attempt := range attempts {
-		token, storage, err := antigravityAuthManager.GetToken(attempt.AuthFile, timeout)
-		if err != nil {
-			log.Printf("[ANTIGRAVITY] Auth file %s (%d/%d): %v", attempt.AuthFile, i+1, len(attempts), err)
-			lastErr = err
-			continue
-		}
-
-		if storage.ProjectID == "" {
-			log.Printf("[ANTIGRAVITY] Auth file %s (%d/%d): project_id is empty", attempt.AuthFile, i+1, len(attempts))
-			lastErr = fmt.Errorf("project_id is empty for auth file %s", attempt.AuthFile)
-			continue
-		}
-
-		payload := clonePayload(basePayload)
-		payload["project"] = storage.ProjectID
-		payload["requestId"] = "agent-" + uuid.NewString()
-
-		body, err := json.Marshal(payload)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		req, err := buildAntigravityRequest(upstream, body, token, ctx)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[ANTIGRAVITY] Auth file %s (%d/%d): request failed: %v", attempt.AuthFile, i+1, len(attempts), err)
-			lastErr = err
-			continue
-		}
-
-		if resp.StatusCode >= 400 {
-			log.Printf("[ANTIGRAVITY] Auth file %s (%d/%d): HTTP %d", attempt.AuthFile, i+1, len(attempts), resp.StatusCode)
-			lastErr = fmt.Errorf("upstream returned status %d", resp.StatusCode)
-			if lastResp != nil {
-				lastResp.Body.Close()
+	return forwardStreamWithAuthRetry(authRetryConfig[AntigravityTokenStorage]{
+		Label:   "[ANTIGRAVITY]",
+		Manager: antigravityAuthManager,
+		Validate: func(storage *AntigravityTokenStorage, authFile string) error {
+			if storage.ProjectID == "" {
+				return fmt.Errorf("project_id is empty for auth file %s", authFile)
 			}
-			lastResp = resp
-			continue
-		}
-
-		if lastResp != nil {
-			lastResp.Body.Close()
-			lastResp = nil
-		}
-		return resp, nil
-	}
-
-	if lastResp != nil {
-		return lastResp, nil
-	}
-	return nil, lastErr
+			return nil
+		},
+		MarshalBody: func(base map[string]any, storage *AntigravityTokenStorage) ([]byte, error) {
+			payload := clonePayload(base)
+			payload["project"] = storage.ProjectID
+			payload["requestId"] = "agent-" + uuid.NewString()
+			return json.Marshal(payload)
+		},
+		BuildReq: func(u config.Upstream, body []byte, token string, _ *AntigravityTokenStorage, ctx context.Context) (*http.Request, error) {
+			return buildAntigravityRequest(u, body, token, ctx)
+		},
+	}, client, upstream, basePayload, ctx)
 }
 
 // antigravitySSEToResponsesJSON parses Antigravity SSE output and assembles a non-streaming

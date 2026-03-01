@@ -173,83 +173,14 @@ func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody [
 	if err != nil {
 		return 0, nil, nil, err
 	}
-
-	attempts, err := iterAuthFiles(upstream)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-
-	timeout := ClientResponseHeaderTimeout(client)
-	var lastErr error
-	var lastStatus int
-	var lastBody []byte
-	var lastHeaders http.Header
-
-	for i, attempt := range attempts {
-		token, storage, err := codexAuthManager.GetToken(attempt.AuthFile, timeout)
-		if err != nil {
-			log.Printf("[CODEX] Auth file %s (%d/%d): %v", attempt.AuthFile, i+1, len(attempts), err)
-			lastErr = err
-			continue
-		}
-
-		body, err := json.Marshal(basePayload)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		req, err := buildCodexRequest(client, upstream, body, token, storage, context.Background())
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[CODEX] Auth file %s (%d/%d): request failed: %v", attempt.AuthFile, i+1, len(attempts), err)
-			lastErr = err
-			lastStatus = http.StatusBadGateway
-			continue
-		}
-
-		respBody, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			lastErr = err
-			lastStatus = http.StatusBadGateway
-			continue
-		}
-
-		headers := resp.Header.Clone()
-		StripHopByHopHeaders(headers)
-		headers.Del("Content-Length")
-		headers.Del("Content-Encoding")
-
-		if resp.StatusCode >= 400 {
-			log.Printf("[CODEX] Auth file %s (%d/%d): HTTP %d", attempt.AuthFile, i+1, len(attempts), resp.StatusCode)
-			lastErr = fmt.Errorf("upstream returned status %d", resp.StatusCode)
-			lastStatus = resp.StatusCode
-			lastBody = respBody
-			lastHeaders = headers
-			continue
-		}
-
-		if !clientWantsStream {
-			jsonResp, err := codexSSEToResponsesJSON(respBody)
-			if err != nil {
-				return 0, nil, nil, fmt.Errorf("codex SSE conversion: %w", err)
-			}
-			headers.Set("Content-Type", "application/json")
-			return resp.StatusCode, jsonResp, headers, nil
-		}
-		return resp.StatusCode, respBody, headers, nil
-	}
-
-	if lastBody != nil {
-		return lastStatus, lastBody, lastHeaders, nil
-	}
-	return lastStatus, nil, nil, lastErr
+	return forwardWithAuthRetry(authRetryConfig[CodexTokenStorage]{
+		Label:   "[CODEX]",
+		Manager: codexAuthManager,
+		BuildReq: func(u config.Upstream, body []byte, token string, storage *CodexTokenStorage, ctx context.Context) (*http.Request, error) {
+			return buildCodexRequest(client, u, body, token, storage, ctx)
+		},
+		ConvertSSE: codexSSEToResponsesJSON,
+	}, client, upstream, basePayload, clientWantsStream)
 }
 
 // ForwardToCodexStream sends a streaming request to the Codex upstream
@@ -260,64 +191,13 @@ func ForwardToCodexStream(client *http.Client, upstream config.Upstream, request
 	if err != nil {
 		return nil, err
 	}
-
-	attempts, err := iterAuthFiles(upstream)
-	if err != nil {
-		return nil, err
-	}
-
-	timeout := ClientResponseHeaderTimeout(client)
-	var lastErr error
-	var lastResp *http.Response
-
-	for i, attempt := range attempts {
-		token, storage, err := codexAuthManager.GetToken(attempt.AuthFile, timeout)
-		if err != nil {
-			log.Printf("[CODEX] Auth file %s (%d/%d): %v", attempt.AuthFile, i+1, len(attempts), err)
-			lastErr = err
-			continue
-		}
-
-		body, err := json.Marshal(basePayload)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		req, err := buildCodexRequest(client, upstream, body, token, storage, ctx)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[CODEX] Auth file %s (%d/%d): request failed: %v", attempt.AuthFile, i+1, len(attempts), err)
-			lastErr = err
-			continue
-		}
-
-		if resp.StatusCode >= 400 {
-			log.Printf("[CODEX] Auth file %s (%d/%d): HTTP %d", attempt.AuthFile, i+1, len(attempts), resp.StatusCode)
-			lastErr = fmt.Errorf("upstream returned status %d", resp.StatusCode)
-			if lastResp != nil {
-				lastResp.Body.Close()
-			}
-			lastResp = resp
-			continue
-		}
-
-		if lastResp != nil {
-			lastResp.Body.Close()
-			lastResp = nil
-		}
-		return resp, nil
-	}
-
-	if lastResp != nil {
-		return lastResp, nil
-	}
-	return nil, lastErr
+	return forwardStreamWithAuthRetry(authRetryConfig[CodexTokenStorage]{
+		Label:   "[CODEX]",
+		Manager: codexAuthManager,
+		BuildReq: func(u config.Upstream, body []byte, token string, storage *CodexTokenStorage, ctx context.Context) (*http.Request, error) {
+			return buildCodexRequest(client, u, body, token, storage, ctx)
+		},
+	}, client, upstream, basePayload, ctx)
 }
 
 // codexSSEToResponsesJSON parses Codex SSE output and assembles a non-streaming
