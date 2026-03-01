@@ -104,40 +104,24 @@ func claudeCodeRefreshAndUpdate(client *http.Client, storage *ClaudeCodeTokenSto
 
 // ── ForwardToClaudeCode: called by other handlers' forwardRequest ──────────
 
-// prepareClaudeCodeRequest handles auth, body modification, and HTTP request
-// construction for the Claude Code upstream.
-func prepareClaudeCodeRequest(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool, ctx context.Context) (*http.Request, error) {
-	// Get timeout from client
-	timeout := ClientResponseHeaderTimeout(client)
-
-	// Get a valid access token (auto-refreshes if needed, skips disabled files)
-	accessToken, _, err := claudeCodeAuthManager.GetTokenWithRetry(
-		upstream.AuthFiles, upstream.AuthFileStartIndex(), timeout, "[CLAUDECODE]")
-	if err != nil {
-		return nil, fmt.Errorf("claudecode auth: %w", err)
-	}
-
-	// Parse request body to ensure stream field is set correctly
+// buildClaudeCodeBasePayload parses and transforms the request body in ways
+// that are independent of which auth file is used.
+func buildClaudeCodeBasePayload(requestBody []byte, clientWantsStream bool) (map[string]any, error) {
 	var bodyMap map[string]any
 	if err := json.Unmarshal(requestBody, &bodyMap); err != nil {
 		return nil, fmt.Errorf("parse request body: %w", err)
 	}
-
-	// Claude Code API supports both streaming and non-streaming
 	bodyMap["stream"] = clientWantsStream
+	return bodyMap, nil
+}
 
-	modifiedBody, err := json.Marshal(bodyMap)
-	if err != nil {
-		return nil, err
-	}
-
+// buildClaudeCodeRequest constructs the HTTP request for one auth file attempt.
+func buildClaudeCodeRequest(client *http.Client, upstream config.Upstream, body []byte, accessToken string, ctx context.Context) (*http.Request, error) {
 	apiURL := claudeCodeBaseURL + "/v1/messages?beta=true"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(modifiedBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-
-	// Set Claude Code-specific headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "text/event-stream")
@@ -153,10 +137,9 @@ func prepareClaudeCodeRequest(client *http.Client, upstream config.Upstream, req
 	req.Header.Set("X-Stainless-Timeout", "600")
 	req.Header.Set("Connection", "keep-alive")
 	ApplyAcceptEncoding(req, upstream)
-	if _, err := ApplyBodyCompression(req, modifiedBody, upstream); err != nil {
+	if _, err := ApplyBodyCompression(req, body, upstream); err != nil {
 		return nil, fmt.Errorf("request body compression: %w", err)
 	}
-
 	return req, nil
 }
 
@@ -166,49 +149,155 @@ func prepareClaudeCodeRequest(client *http.Client, upstream config.Upstream, req
 // The Claude Code API supports both streaming and non-streaming; when clientWantsStream is false,
 // the SSE output is reassembled into a single JSON response.
 func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
-	req, err := prepareClaudeCodeRequest(client, upstream, requestBody, clientWantsStream, context.Background())
+	basePayload, err := buildClaudeCodeBasePayload(requestBody, clientWantsStream)
 	if err != nil {
 		return 0, nil, nil, err
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
+	attempts, err := iterAuthFiles(upstream)
 	if err != nil {
 		return 0, nil, nil, err
 	}
 
-	headers := resp.Header.Clone()
-	StripHopByHopHeaders(headers)
-	headers.Del("Content-Length")
-	headers.Del("Content-Encoding")
+	timeout := ClientResponseHeaderTimeout(client)
+	var lastErr error
+	var lastStatus int
+	var lastBody []byte
+	var lastHeaders http.Header
 
-	// If client doesn't want streaming but upstream returned streaming, convert SSE to JSON
-	if !clientWantsStream && resp.StatusCode < 400 && strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		jsonResp, err := claudeCodeSSEToJSON(respBody)
+	for i, attempt := range attempts {
+		token, _, err := claudeCodeAuthManager.GetToken(attempt.AuthFile, timeout)
 		if err != nil {
-			return 0, nil, nil, fmt.Errorf("claudecode SSE conversion: %w", err)
+			log.Printf("[CLAUDECODE] Auth file %s (%d/%d): %v", attempt.AuthFile, i+1, len(attempts), err)
+			lastErr = err
+			continue
 		}
-		headers.Set("Content-Type", "application/json")
-		return resp.StatusCode, jsonResp, headers, nil
+
+		body, err := json.Marshal(basePayload)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		req, err := buildClaudeCodeRequest(client, upstream, body, token, context.Background())
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[CLAUDECODE] Auth file %s (%d/%d): request failed: %v", attempt.AuthFile, i+1, len(attempts), err)
+			lastErr = err
+			lastStatus = http.StatusBadGateway
+			continue
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			lastStatus = http.StatusBadGateway
+			continue
+		}
+
+		headers := resp.Header.Clone()
+		StripHopByHopHeaders(headers)
+		headers.Del("Content-Length")
+		headers.Del("Content-Encoding")
+
+		if resp.StatusCode >= 400 {
+			log.Printf("[CLAUDECODE] Auth file %s (%d/%d): HTTP %d", attempt.AuthFile, i+1, len(attempts), resp.StatusCode)
+			lastErr = fmt.Errorf("upstream returned status %d", resp.StatusCode)
+			lastStatus = resp.StatusCode
+			lastBody = respBody
+			lastHeaders = headers
+			continue
+		}
+
+		if !clientWantsStream && strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+			jsonResp, err := claudeCodeSSEToJSON(respBody)
+			if err != nil {
+				return 0, nil, nil, fmt.Errorf("claudecode SSE conversion: %w", err)
+			}
+			headers.Set("Content-Type", "application/json")
+			return resp.StatusCode, jsonResp, headers, nil
+		}
+		return resp.StatusCode, respBody, headers, nil
 	}
 
-	return resp.StatusCode, respBody, headers, nil
+	if lastBody != nil {
+		return lastStatus, lastBody, lastHeaders, nil
+	}
+	return lastStatus, nil, nil, lastErr
 }
 
 // ForwardToClaudeCodeStream sends a streaming request to the Claude Code upstream
 // and returns the raw *http.Response with body unconsumed.
 // The caller is responsible for closing resp.Body.
 func ForwardToClaudeCodeStream(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Response, error) {
-	req, err := prepareClaudeCodeRequest(client, upstream, requestBody, true, ctx)
+	basePayload, err := buildClaudeCodeBasePayload(requestBody, true)
 	if err != nil {
 		return nil, err
 	}
-	return client.Do(req)
+
+	attempts, err := iterAuthFiles(upstream)
+	if err != nil {
+		return nil, err
+	}
+
+	timeout := ClientResponseHeaderTimeout(client)
+	var lastErr error
+	var lastResp *http.Response
+
+	for i, attempt := range attempts {
+		token, _, err := claudeCodeAuthManager.GetToken(attempt.AuthFile, timeout)
+		if err != nil {
+			log.Printf("[CLAUDECODE] Auth file %s (%d/%d): %v", attempt.AuthFile, i+1, len(attempts), err)
+			lastErr = err
+			continue
+		}
+
+		body, err := json.Marshal(basePayload)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		req, err := buildClaudeCodeRequest(client, upstream, body, token, ctx)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[CLAUDECODE] Auth file %s (%d/%d): request failed: %v", attempt.AuthFile, i+1, len(attempts), err)
+			lastErr = err
+			continue
+		}
+
+		if resp.StatusCode >= 400 {
+			log.Printf("[CLAUDECODE] Auth file %s (%d/%d): HTTP %d", attempt.AuthFile, i+1, len(attempts), resp.StatusCode)
+			lastErr = fmt.Errorf("upstream returned status %d", resp.StatusCode)
+			if lastResp != nil {
+				lastResp.Body.Close()
+			}
+			lastResp = resp
+			continue
+		}
+
+		if lastResp != nil {
+			lastResp.Body.Close()
+			lastResp = nil
+		}
+		return resp, nil
+	}
+
+	if lastResp != nil {
+		return lastResp, nil
+	}
+	return nil, lastErr
 }
 
 // claudeCodeSSEToJSON parses Claude Code SSE output and assembles a non-streaming JSON response.

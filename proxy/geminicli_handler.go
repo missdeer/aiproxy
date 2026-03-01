@@ -153,27 +153,13 @@ func geminiCLIRefreshAndUpdate(client *http.Client, storage *GeminiCLITokenStora
 
 // ── ForwardToGeminiCLI: called by other handlers' forwardRequest ──────────
 
-// prepareGeminiCLIRequest handles auth, body conversion to Gemini format,
-// and HTTP request construction for the Gemini CLI upstream.
-func prepareGeminiCLIRequest(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Request, error) {
-	// Get timeout from client
-	timeout := ClientResponseHeaderTimeout(client)
-
-	// Get a valid access token (auto-refreshes if needed, skips disabled files)
-	accessToken, storage, err := geminiCLIAuthManager.GetTokenWithRetry(
-		upstream.AuthFiles, upstream.AuthFileStartIndex(), timeout, "[GEMINICLI]")
-	if err != nil {
-		return nil, fmt.Errorf("geminicli auth: %w", err)
-	}
-
-	if storage.ProjectID == "" {
-		return nil, fmt.Errorf("project_id is empty for upstream %s", upstream.Name)
-	}
-
-	// Parse request body to extract model and input
+// buildGeminiCLIBasePayload parses and transforms the request body in ways
+// that are independent of which auth file is used. The "project" field
+// is NOT set here; it is injected per-auth-file in the retry loop.
+func buildGeminiCLIBasePayload(requestBody []byte) (map[string]any, string, error) {
 	var bodyMap map[string]any
 	if err := json.Unmarshal(requestBody, &bodyMap); err != nil {
-		return nil, fmt.Errorf("parse request body: %w", err)
+		return nil, "", fmt.Errorf("parse request body: %w", err)
 	}
 
 	model, _ := bodyMap["model"].(string)
@@ -181,16 +167,13 @@ func prepareGeminiCLIRequest(client *http.Client, upstream config.Upstream, requ
 		model = "gemini-3-pro-preview"
 	}
 
-	// Convert Responses format to Gemini CLI format
 	payload := map[string]any{
-		"project": storage.ProjectID,
-		"model":   model,
+		"model": model,
 		"request": map[string]any{
 			"contents": []map[string]any{},
 		},
 	}
 
-	// Extract input from Responses format
 	if input, ok := bodyMap["input"]; ok {
 		switch inp := input.(type) {
 		case string:
@@ -203,7 +186,6 @@ func prepareGeminiCLIRequest(client *http.Client, upstream config.Upstream, requ
 				},
 			}
 		case []any:
-			// Already in message format
 			contents := make([]map[string]any, 0, len(inp))
 			for _, msg := range inp {
 				if msgMap, ok := msg.(map[string]any); ok {
@@ -234,15 +216,16 @@ func prepareGeminiCLIRequest(client *http.Client, upstream config.Upstream, requ
 		}
 	}
 
-	reqBody, _ := json.Marshal(payload)
+	return payload, model, nil
+}
 
+// buildGeminiCLIRequest constructs the HTTP request for one auth file attempt.
+func buildGeminiCLIRequest(upstream config.Upstream, body []byte, accessToken string, ctx context.Context) (*http.Request, error) {
 	apiURL := geminiCLIBase + geminiCLIPath + "?alt=sse"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-
-	// Set Gemini CLI-specific headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "text/event-stream")
@@ -250,10 +233,9 @@ func prepareGeminiCLIRequest(client *http.Client, upstream config.Upstream, requ
 	req.Header.Set("X-Goog-Api-Client", geminiCLIAPIClient)
 	req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
 	ApplyAcceptEncoding(req, upstream)
-	if _, err := ApplyBodyCompression(req, reqBody, upstream); err != nil {
+	if _, err := ApplyBodyCompression(req, body, upstream); err != nil {
 		return nil, fmt.Errorf("request body compression: %w", err)
 	}
-
 	return req, nil
 }
 
@@ -263,49 +245,173 @@ func prepareGeminiCLIRequest(client *http.Client, upstream config.Upstream, requ
 // The Gemini CLI API always uses SSE streaming; when clientWantsStream is false,
 // the SSE output is reassembled into a single Responses-format JSON response.
 func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
-	req, err := prepareGeminiCLIRequest(client, upstream, requestBody, context.Background())
+	basePayload, _, err := buildGeminiCLIBasePayload(requestBody)
 	if err != nil {
 		return 0, nil, nil, err
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
+	attempts, err := iterAuthFiles(upstream)
 	if err != nil {
 		return 0, nil, nil, err
 	}
 
-	headers := resp.Header.Clone()
-	StripHopByHopHeaders(headers)
-	headers.Del("Content-Length")
-	headers.Del("Content-Encoding")
+	timeout := ClientResponseHeaderTimeout(client)
+	var lastErr error
+	var lastStatus int
+	var lastBody []byte
+	var lastHeaders http.Header
 
-	// If client doesn't want streaming, convert SSE to a single JSON response
-	if !clientWantsStream && resp.StatusCode < 400 {
-		jsonResp, err := geminiCLISSEToResponsesJSON(respBody)
+	for i, attempt := range attempts {
+		token, storage, err := geminiCLIAuthManager.GetToken(attempt.AuthFile, timeout)
 		if err != nil {
-			return 0, nil, nil, fmt.Errorf("geminicli SSE conversion: %w", err)
+			log.Printf("[GEMINICLI] Auth file %s (%d/%d): %v", attempt.AuthFile, i+1, len(attempts), err)
+			lastErr = err
+			continue
 		}
-		headers.Set("Content-Type", "application/json")
-		return resp.StatusCode, jsonResp, headers, nil
+
+		if storage.ProjectID == "" {
+			log.Printf("[GEMINICLI] Auth file %s (%d/%d): project_id is empty", attempt.AuthFile, i+1, len(attempts))
+			lastErr = fmt.Errorf("project_id is empty for auth file %s", attempt.AuthFile)
+			continue
+		}
+
+		payload := clonePayload(basePayload)
+		payload["project"] = storage.ProjectID
+
+		body, err := json.Marshal(payload)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		req, err := buildGeminiCLIRequest(upstream, body, token, context.Background())
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[GEMINICLI] Auth file %s (%d/%d): request failed: %v", attempt.AuthFile, i+1, len(attempts), err)
+			lastErr = err
+			lastStatus = http.StatusBadGateway
+			continue
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			lastStatus = http.StatusBadGateway
+			continue
+		}
+
+		headers := resp.Header.Clone()
+		StripHopByHopHeaders(headers)
+		headers.Del("Content-Length")
+		headers.Del("Content-Encoding")
+
+		if resp.StatusCode >= 400 {
+			log.Printf("[GEMINICLI] Auth file %s (%d/%d): HTTP %d", attempt.AuthFile, i+1, len(attempts), resp.StatusCode)
+			lastErr = fmt.Errorf("upstream returned status %d", resp.StatusCode)
+			lastStatus = resp.StatusCode
+			lastBody = respBody
+			lastHeaders = headers
+			continue
+		}
+
+		if !clientWantsStream {
+			jsonResp, err := geminiCLISSEToResponsesJSON(respBody)
+			if err != nil {
+				return 0, nil, nil, fmt.Errorf("geminicli SSE conversion: %w", err)
+			}
+			headers.Set("Content-Type", "application/json")
+			return resp.StatusCode, jsonResp, headers, nil
+		}
+		return resp.StatusCode, respBody, headers, nil
 	}
 
-	return resp.StatusCode, respBody, headers, nil
+	if lastBody != nil {
+		return lastStatus, lastBody, lastHeaders, nil
+	}
+	return lastStatus, nil, nil, lastErr
 }
 
 // ForwardToGeminiCLIStream sends a streaming request to the Gemini CLI upstream
 // and returns the raw *http.Response with body unconsumed.
 // The caller is responsible for closing resp.Body.
 func ForwardToGeminiCLIStream(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Response, error) {
-	req, err := prepareGeminiCLIRequest(client, upstream, requestBody, ctx)
+	basePayload, _, err := buildGeminiCLIBasePayload(requestBody)
 	if err != nil {
 		return nil, err
 	}
-	return client.Do(req)
+
+	attempts, err := iterAuthFiles(upstream)
+	if err != nil {
+		return nil, err
+	}
+
+	timeout := ClientResponseHeaderTimeout(client)
+	var lastErr error
+	var lastResp *http.Response
+
+	for i, attempt := range attempts {
+		token, storage, err := geminiCLIAuthManager.GetToken(attempt.AuthFile, timeout)
+		if err != nil {
+			log.Printf("[GEMINICLI] Auth file %s (%d/%d): %v", attempt.AuthFile, i+1, len(attempts), err)
+			lastErr = err
+			continue
+		}
+
+		if storage.ProjectID == "" {
+			log.Printf("[GEMINICLI] Auth file %s (%d/%d): project_id is empty", attempt.AuthFile, i+1, len(attempts))
+			lastErr = fmt.Errorf("project_id is empty for auth file %s", attempt.AuthFile)
+			continue
+		}
+
+		payload := clonePayload(basePayload)
+		payload["project"] = storage.ProjectID
+
+		body, err := json.Marshal(payload)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		req, err := buildGeminiCLIRequest(upstream, body, token, ctx)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[GEMINICLI] Auth file %s (%d/%d): request failed: %v", attempt.AuthFile, i+1, len(attempts), err)
+			lastErr = err
+			continue
+		}
+
+		if resp.StatusCode >= 400 {
+			log.Printf("[GEMINICLI] Auth file %s (%d/%d): HTTP %d", attempt.AuthFile, i+1, len(attempts), resp.StatusCode)
+			lastErr = fmt.Errorf("upstream returned status %d", resp.StatusCode)
+			if lastResp != nil {
+				lastResp.Body.Close()
+			}
+			lastResp = resp
+			continue
+		}
+
+		if lastResp != nil {
+			lastResp.Body.Close()
+			lastResp = nil
+		}
+		return resp, nil
+	}
+
+	if lastResp != nil {
+		return lastResp, nil
+	}
+	return nil, lastErr
 }
 
 // geminiCLISSEToResponsesJSON parses Gemini CLI SSE output and assembles a non-streaming

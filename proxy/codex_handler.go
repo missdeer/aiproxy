@@ -115,52 +115,35 @@ func codexRefreshAndUpdate(client *http.Client, storage *CodexTokenStorage, auth
 
 // ── ForwardToCodex: called by other handlers' forwardRequest ──────────
 
-// prepareCodexRequest handles auth, body modification, and HTTP request
-// construction for the Codex upstream. The returned *http.Request is ready
-// to be executed by client.Do.
-func prepareCodexRequest(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Request, error) {
-	// Get timeout from client
-	timeout := ClientResponseHeaderTimeout(client)
-
-	// Get a valid access token (auto-refreshes if needed, skips disabled files)
-	accessToken, storage, err := codexAuthManager.GetTokenWithRetry(
-		upstream.AuthFiles, upstream.AuthFileStartIndex(), timeout, "[CODEX]")
-	if err != nil {
-		return nil, fmt.Errorf("codex auth: %w", err)
-	}
-
-	// Ensure required fields for Codex API
+// buildCodexBasePayload parses and transforms the request body in ways that
+// are independent of which auth file is used.
+func buildCodexBasePayload(requestBody []byte) (map[string]any, error) {
 	var bodyMap map[string]any
 	if err := json.Unmarshal(requestBody, &bodyMap); err != nil {
 		return nil, fmt.Errorf("parse request body: %w", err)
 	}
-	// Codex API always requires streaming
 	bodyMap["stream"] = true
 	bodyMap["store"] = false
 	delete(bodyMap, "truncation")
 	delete(bodyMap, "context_management")
-	// Codex requires instructions field
 	if _, ok := bodyMap["instructions"]; !ok {
 		bodyMap["instructions"] = ""
 	}
-	// Codex requires input to be a list of message objects, not a plain string
 	if inputStr, ok := bodyMap["input"].(string); ok {
 		bodyMap["input"] = []map[string]any{
 			{"role": "user", "content": inputStr},
 		}
 	}
-	modifiedBody, err := json.Marshal(bodyMap)
-	if err != nil {
-		return nil, err
-	}
+	return bodyMap, nil
+}
 
+// buildCodexRequest constructs the HTTP request for one auth file attempt.
+func buildCodexRequest(client *http.Client, upstream config.Upstream, body []byte, accessToken string, storage *CodexTokenStorage, ctx context.Context) (*http.Request, error) {
 	apiURL := codexBaseURL + "/responses"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(modifiedBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-
-	// Set Codex-specific headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "text/event-stream")
@@ -170,12 +153,13 @@ func prepareCodexRequest(client *http.Client, upstream config.Upstream, requestB
 	req.Header.Set("Connection", "Keep-Alive")
 	if storage.AccountID != "" {
 		req.Header.Set("Chatgpt-Account-Id", storage.AccountID)
+	} else {
+		req.Header.Del("Chatgpt-Account-Id")
 	}
 	ApplyAcceptEncoding(req, upstream)
-	if _, err := ApplyBodyCompression(req, modifiedBody, upstream); err != nil {
+	if _, err := ApplyBodyCompression(req, body, upstream); err != nil {
 		return nil, fmt.Errorf("request body compression: %w", err)
 	}
-
 	return req, nil
 }
 
@@ -185,49 +169,155 @@ func prepareCodexRequest(client *http.Client, upstream config.Upstream, requestB
 // The Codex API always uses SSE streaming; when clientWantsStream is false,
 // the SSE output is reassembled into a single Responses-format JSON response.
 func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
-	req, err := prepareCodexRequest(client, upstream, requestBody, context.Background())
+	basePayload, err := buildCodexBasePayload(requestBody)
 	if err != nil {
 		return 0, nil, nil, err
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
+	attempts, err := iterAuthFiles(upstream)
 	if err != nil {
 		return 0, nil, nil, err
 	}
 
-	headers := resp.Header.Clone()
-	StripHopByHopHeaders(headers)
-	headers.Del("Content-Length")
-	headers.Del("Content-Encoding")
+	timeout := ClientResponseHeaderTimeout(client)
+	var lastErr error
+	var lastStatus int
+	var lastBody []byte
+	var lastHeaders http.Header
 
-	// If client doesn't want streaming, convert SSE to a single JSON response
-	if !clientWantsStream && resp.StatusCode < 400 {
-		jsonResp, err := codexSSEToResponsesJSON(respBody)
+	for i, attempt := range attempts {
+		token, storage, err := codexAuthManager.GetToken(attempt.AuthFile, timeout)
 		if err != nil {
-			return 0, nil, nil, fmt.Errorf("codex SSE conversion: %w", err)
+			log.Printf("[CODEX] Auth file %s (%d/%d): %v", attempt.AuthFile, i+1, len(attempts), err)
+			lastErr = err
+			continue
 		}
-		headers.Set("Content-Type", "application/json")
-		return resp.StatusCode, jsonResp, headers, nil
+
+		body, err := json.Marshal(basePayload)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		req, err := buildCodexRequest(client, upstream, body, token, storage, context.Background())
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[CODEX] Auth file %s (%d/%d): request failed: %v", attempt.AuthFile, i+1, len(attempts), err)
+			lastErr = err
+			lastStatus = http.StatusBadGateway
+			continue
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			lastStatus = http.StatusBadGateway
+			continue
+		}
+
+		headers := resp.Header.Clone()
+		StripHopByHopHeaders(headers)
+		headers.Del("Content-Length")
+		headers.Del("Content-Encoding")
+
+		if resp.StatusCode >= 400 {
+			log.Printf("[CODEX] Auth file %s (%d/%d): HTTP %d", attempt.AuthFile, i+1, len(attempts), resp.StatusCode)
+			lastErr = fmt.Errorf("upstream returned status %d", resp.StatusCode)
+			lastStatus = resp.StatusCode
+			lastBody = respBody
+			lastHeaders = headers
+			continue
+		}
+
+		if !clientWantsStream {
+			jsonResp, err := codexSSEToResponsesJSON(respBody)
+			if err != nil {
+				return 0, nil, nil, fmt.Errorf("codex SSE conversion: %w", err)
+			}
+			headers.Set("Content-Type", "application/json")
+			return resp.StatusCode, jsonResp, headers, nil
+		}
+		return resp.StatusCode, respBody, headers, nil
 	}
 
-	return resp.StatusCode, respBody, headers, nil
+	if lastBody != nil {
+		return lastStatus, lastBody, lastHeaders, nil
+	}
+	return lastStatus, nil, nil, lastErr
 }
 
 // ForwardToCodexStream sends a streaming request to the Codex upstream
 // and returns the raw *http.Response with body unconsumed.
 // The caller is responsible for closing resp.Body.
 func ForwardToCodexStream(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Response, error) {
-	req, err := prepareCodexRequest(client, upstream, requestBody, ctx)
+	basePayload, err := buildCodexBasePayload(requestBody)
 	if err != nil {
 		return nil, err
 	}
-	return client.Do(req)
+
+	attempts, err := iterAuthFiles(upstream)
+	if err != nil {
+		return nil, err
+	}
+
+	timeout := ClientResponseHeaderTimeout(client)
+	var lastErr error
+	var lastResp *http.Response
+
+	for i, attempt := range attempts {
+		token, storage, err := codexAuthManager.GetToken(attempt.AuthFile, timeout)
+		if err != nil {
+			log.Printf("[CODEX] Auth file %s (%d/%d): %v", attempt.AuthFile, i+1, len(attempts), err)
+			lastErr = err
+			continue
+		}
+
+		body, err := json.Marshal(basePayload)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		req, err := buildCodexRequest(client, upstream, body, token, storage, ctx)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[CODEX] Auth file %s (%d/%d): request failed: %v", attempt.AuthFile, i+1, len(attempts), err)
+			lastErr = err
+			continue
+		}
+
+		if resp.StatusCode >= 400 {
+			log.Printf("[CODEX] Auth file %s (%d/%d): HTTP %d", attempt.AuthFile, i+1, len(attempts), resp.StatusCode)
+			lastErr = fmt.Errorf("upstream returned status %d", resp.StatusCode)
+			if lastResp != nil {
+				lastResp.Body.Close()
+			}
+			lastResp = resp
+			continue
+		}
+
+		if lastResp != nil {
+			lastResp.Body.Close()
+			lastResp = nil
+		}
+		return resp, nil
+	}
+
+	if lastResp != nil {
+		return lastResp, nil
+	}
+	return nil, lastErr
 }
 
 // codexSSEToResponsesJSON parses Codex SSE output and assembles a non-streaming
