@@ -70,129 +70,163 @@ func (h *AnthropicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[ANTHROPIC REQUEST] Model: %s, Stream: %v, Prompt: %s", req.Model, req.Stream, promptPreview)
 
 	originalModel := req.Model
-
-	upstreams := h.balancer.GetAll()
-	if len(upstreams) == 0 {
-		log.Printf("[ERROR] No upstreams configured")
-		http.Error(w, "No upstreams configured", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Filter upstreams that support the requested model and are available
-	var supportedUpstreams []config.Upstream
-	for _, u := range upstreams {
-		if u.SupportsModel(originalModel) && h.balancer.IsAvailable(u.Name, originalModel) {
-			supportedUpstreams = append(supportedUpstreams, u)
-		}
-	}
-
-	if len(supportedUpstreams) == 0 {
-		log.Printf("[ERROR] No available upstream supports model: %s", originalModel)
-		http.Error(w, fmt.Sprintf("No upstream supports model: %s", originalModel), http.StatusBadRequest)
-		return
-	}
-
-	log.Printf("[INFO] Found %d available upstreams for model %s", len(supportedUpstreams), originalModel)
-
-	// Use NextForModel to get the next upstream that supports this model
-	next := h.balancer.NextForModel(originalModel)
-
-	// Reorder upstreams: start from the one returned by NextForModel
-	startIdx := 0
-	if next != nil {
-		for i, u := range supportedUpstreams {
-			if u.Name == next.Name {
-				startIdx = i
-				break
-			}
-		}
-	}
-	ordered := make([]config.Upstream, 0, len(supportedUpstreams))
-	ordered = append(ordered, supportedUpstreams[startIdx:]...)
-	ordered = append(ordered, supportedUpstreams[:startIdx]...)
+	currentModel := originalModel
+	visited := map[string]bool{currentModel: true}
 
 	var lastErr error
 	var lastStatus int
+	attemptedUpstream := false
 
-	for _, upstream := range ordered {
-		mappedModel := upstream.MapModel(originalModel)
-		log.Printf("[FORWARD] Upstream: %s, URL: %s, Model: %s -> %s, APIType: %s",
-			upstream.Name, upstream.BaseURL, originalModel, mappedModel, upstream.GetAPIType())
-
-		status, respBody, respHeaders, streamResp, err := h.forwardRequest(upstream, mappedModel, body, req.Stream, r)
-		if err != nil {
-			log.Printf("[ERROR] Upstream %s connection error: %v", upstream.Name, err)
-			if h.balancer.RecordFailure(upstream.Name, originalModel) {
-				log.Printf("[CIRCUIT] Upstream %s model %s marked as unavailable after %d consecutive failures", upstream.Name, originalModel, 3)
-			}
-			lastErr = err
-			lastStatus = http.StatusBadGateway
-			continue
-		}
-
-		// True streaming passthrough: pipe response directly
-		if streamResp != nil {
-			defer streamResp.Body.Close()
-			for k, vv := range streamResp.Header {
-				for _, v := range vv {
-					w.Header().Add(k, v)
-				}
-			}
-			stripHopByHopHeaders(w.Header())
-			w.WriteHeader(status)
-			streamStart := time.Now()
-			log.Printf("[ANTHROPIC] stream_start upstream=%s status=%d (headers sent to client)", upstream.Name, status)
-
-			result := PipeStream(w, streamResp.Body)
-			switch {
-			case result.UpstreamErr != nil:
-				if r.Context().Err() != nil {
-					log.Printf("[INFO] Upstream %s stream aborted by client disconnect", upstream.Name)
-				} else {
-					log.Printf("[ERROR] Upstream %s stream read error: %v", upstream.Name, result.UpstreamErr)
-					h.balancer.RecordFailure(upstream.Name, originalModel)
-				}
-			case result.DownstreamErr != nil:
-				log.Printf("[INFO] Upstream %s stream ended by client disconnect: %v", upstream.Name, result.DownstreamErr)
-			default:
-				h.balancer.RecordSuccess(upstream.Name, originalModel)
-				log.Printf("[SUCCESS] Upstream %s streaming completed (%d bytes, %s)", upstream.Name, result.BytesWritten, time.Since(streamStart))
-			}
+	for { // outer fallback loop
+		upstreams := h.balancer.GetAll()
+		if len(upstreams) == 0 {
+			log.Printf("[ERROR] No upstreams configured")
+			http.Error(w, "No upstreams configured", http.StatusServiceUnavailable)
 			return
 		}
 
-		if status >= 400 {
-			log.Printf("[ERROR] Upstream %s returned HTTP %d, response: %s", upstream.Name, status, truncateString(string(respBody), 200))
-			if h.balancer.RecordFailure(upstream.Name, originalModel) {
-				log.Printf("[CIRCUIT] Upstream %s model %s marked as unavailable after %d consecutive failures", upstream.Name, originalModel, 3)
-			}
-			lastErr = fmt.Errorf("upstream returned status %d", status)
-			lastStatus = status
-			continue
-		}
-
-		// Success - reset failure count
-		h.balancer.RecordSuccess(upstream.Name, originalModel)
-		log.Printf("[SUCCESS] Upstream %s returned HTTP %d", upstream.Name, status)
-
-		// Success - copy response headers and body
-		for k, vv := range respHeaders {
-			for _, v := range vv {
-				w.Header().Add(k, v)
+		// Filter upstreams that support the requested model and are available
+		var supportedUpstreams []config.Upstream
+		for _, u := range upstreams {
+			if u.SupportsModel(currentModel) && h.balancer.IsAvailable(u.Name, currentModel) {
+				supportedUpstreams = append(supportedUpstreams, u)
 			}
 		}
-		w.WriteHeader(status)
 
-		if req.Stream {
-			h.streamResponse(w, respBody)
-		} else {
-			w.Write(respBody)
+		if len(supportedUpstreams) == 0 {
+			log.Printf("[WARN] No available upstream supports model: %s", currentModel)
+			goto tryFallback
 		}
-		return
+
+		log.Printf("[INFO] Found %d available upstreams for model %s", len(supportedUpstreams), currentModel)
+
+		{
+			// Use NextForModel to get the next upstream that supports this model
+			next := h.balancer.NextForModel(currentModel)
+
+			// Reorder upstreams: start from the one returned by NextForModel
+			startIdx := 0
+			if next != nil {
+				for i, u := range supportedUpstreams {
+					if u.Name == next.Name {
+						startIdx = i
+						break
+					}
+				}
+			}
+			ordered := make([]config.Upstream, 0, len(supportedUpstreams))
+			ordered = append(ordered, supportedUpstreams[startIdx:]...)
+			ordered = append(ordered, supportedUpstreams[:startIdx]...)
+
+			for _, upstream := range ordered {
+				attemptedUpstream = true
+				mappedModel := upstream.MapModel(currentModel)
+				log.Printf("[FORWARD] Upstream: %s, URL: %s, Model: %s -> %s, APIType: %s",
+					upstream.Name, upstream.BaseURL, currentModel, mappedModel, upstream.GetAPIType())
+
+				status, respBody, respHeaders, streamResp, err := h.forwardRequest(upstream, mappedModel, body, req.Stream, r)
+				if err != nil {
+					log.Printf("[ERROR] Upstream %s connection error: %v", upstream.Name, err)
+					if h.balancer.RecordFailure(upstream.Name, currentModel) {
+						log.Printf("[CIRCUIT] Upstream %s model %s marked as unavailable after %d consecutive failures", upstream.Name, currentModel, 3)
+					}
+					lastErr = err
+					lastStatus = http.StatusBadGateway
+					continue
+				}
+
+				// True streaming passthrough: pipe response directly
+				if streamResp != nil {
+					defer streamResp.Body.Close()
+					for k, vv := range streamResp.Header {
+						for _, v := range vv {
+							w.Header().Add(k, v)
+						}
+					}
+					stripHopByHopHeaders(w.Header())
+					w.WriteHeader(status)
+					streamStart := time.Now()
+					log.Printf("[ANTHROPIC] stream_start upstream=%s status=%d (headers sent to client)", upstream.Name, status)
+
+					result := PipeStream(w, streamResp.Body)
+					switch {
+					case result.UpstreamErr != nil:
+						if r.Context().Err() != nil {
+							log.Printf("[INFO] Upstream %s stream aborted by client disconnect", upstream.Name)
+						} else {
+							log.Printf("[ERROR] Upstream %s stream read error: %v", upstream.Name, result.UpstreamErr)
+							h.balancer.RecordFailure(upstream.Name, currentModel)
+						}
+					case result.DownstreamErr != nil:
+						log.Printf("[INFO] Upstream %s stream ended by client disconnect: %v", upstream.Name, result.DownstreamErr)
+					default:
+						h.balancer.RecordSuccess(upstream.Name, currentModel)
+						log.Printf("[SUCCESS] Upstream %s streaming completed (%d bytes, %s)", upstream.Name, result.BytesWritten, time.Since(streamStart))
+					}
+					return
+				}
+
+				if status >= 400 {
+					log.Printf("[ERROR] Upstream %s returned HTTP %d, response: %s", upstream.Name, status, truncateString(string(respBody), 200))
+					if h.balancer.RecordFailure(upstream.Name, currentModel) {
+						log.Printf("[CIRCUIT] Upstream %s model %s marked as unavailable after %d consecutive failures", upstream.Name, currentModel, 3)
+					}
+					lastErr = fmt.Errorf("upstream returned status %d", status)
+					lastStatus = status
+					continue
+				}
+
+				// Success - reset failure count
+				h.balancer.RecordSuccess(upstream.Name, currentModel)
+				log.Printf("[SUCCESS] Upstream %s returned HTTP %d", upstream.Name, status)
+
+				// Success - copy response headers and body
+				for k, vv := range respHeaders {
+					for _, v := range vv {
+						w.Header().Add(k, v)
+					}
+				}
+				w.WriteHeader(status)
+
+				if req.Stream {
+					h.streamResponse(w, respBody)
+				} else {
+					w.Write(respBody)
+				}
+				return
+			}
+
+			// All upstreams failed for this model
+			log.Printf("[FAILED] All %d upstreams failed for model %s, last error: %v, last status: %d", len(ordered), currentModel, lastErr, lastStatus)
+		}
+
+	tryFallback:
+		// Check for model fallback
+		h.mu.RLock()
+		fallback := h.cfg.GetModelFallback(currentModel)
+		h.mu.RUnlock()
+		if fallback == "" || visited[fallback] {
+			break
+		}
+		log.Printf("[FALLBACK] model %s -> %s (all upstreams exhausted)", currentModel, fallback)
+		visited[fallback] = true
+		currentModel = fallback
+
+		// Update request body with the fallback model
+		var bodyMap map[string]any
+		if err := json.Unmarshal(body, &bodyMap); err == nil {
+			bodyMap["model"] = currentModel
+			if newBody, err := json.Marshal(bodyMap); err == nil {
+				body = newBody
+			}
+		}
 	}
 
-	// All upstreams failed
-	log.Printf("[FAILED] All %d upstreams failed for model %s, last error: %v, last status: %d", len(ordered), originalModel, lastErr, lastStatus)
+	// All upstreams and fallbacks exhausted
+	if !attemptedUpstream {
+		http.Error(w, fmt.Sprintf("No upstream supports model: %s", originalModel), http.StatusBadRequest)
+		return
+	}
 	if lastStatus == 0 {
 		lastStatus = http.StatusBadGateway
 	}

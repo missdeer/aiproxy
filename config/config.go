@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -149,12 +150,21 @@ type LogConfig struct {
 }
 
 type Config struct {
-	Bind                   string     `yaml:"bind"`
-	Listen                 string     `yaml:"listen"`
-	DefaultMaxTokens       int        `yaml:"default_max_tokens"`
-	UpstreamRequestTimeout int        `yaml:"upstream_request_timeout"` // Timeout in seconds for upstream requests (default: 60)
-	Upstreams              []Upstream `yaml:"upstreams"`
-	Log                    LogConfig  `yaml:"log"`
+	Bind                   string            `yaml:"bind"`
+	Listen                 string            `yaml:"listen"`
+	DefaultMaxTokens       int               `yaml:"default_max_tokens"`
+	UpstreamRequestTimeout int               `yaml:"upstream_request_timeout"` // Timeout in seconds for upstream requests (default: 60)
+	Upstreams              []Upstream        `yaml:"upstreams"`
+	Log                    LogConfig         `yaml:"log"`
+	ModelFallback          map[string]string `yaml:"model_fallback"` // Model fallback chain: key=model, value=fallback model
+}
+
+// GetModelFallback returns the fallback model for the given model, or "" if none configured.
+func (c *Config) GetModelFallback(model string) string {
+	if c == nil || c.ModelFallback == nil {
+		return ""
+	}
+	return c.ModelFallback[model]
 }
 
 func Load(path string) (*Config, error) {
@@ -228,5 +238,36 @@ func Load(path string) (*Config, error) {
 		cfg.Log.MaxAge = 28 // 28 days
 	}
 
+	if err := validateModelFallback(cfg.ModelFallback); err != nil {
+		return nil, err
+	}
+
 	return &cfg, nil
+}
+
+func validateModelFallback(chain map[string]string) error {
+	for source, target := range chain {
+		if strings.TrimSpace(source) == "" {
+			return fmt.Errorf("model_fallback contains an empty source model")
+		}
+		if strings.TrimSpace(target) == "" {
+			return fmt.Errorf("model_fallback[%q] points to an empty fallback model", source)
+		}
+	}
+	for start := range chain {
+		visited := map[string]struct{}{start: {}}
+		current := start
+		for {
+			next, ok := chain[current]
+			if !ok {
+				break
+			}
+			if _, seen := visited[next]; seen {
+				return fmt.Errorf("model_fallback contains a cycle: %q -> %q", current, next)
+			}
+			visited[next] = struct{}{}
+			current = next
+		}
+	}
+	return nil
 }

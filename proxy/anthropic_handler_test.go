@@ -2,8 +2,11 @@ package proxy
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/missdeer/aiproxy/config"
 )
 
 // ── extractPromptPreview tests ─────────────────────────────────────────
@@ -155,4 +158,35 @@ func TestStripHopByHopHeaders(t *testing.T) {
 			t.Fatal("X-Keep should be preserved")
 		}
 	})
+}
+
+func TestAnthropicHandler_NoSupportedModel_NoFallback_ReturnsBadRequest(t *testing.T) {
+	cfg := &config.Config{
+		UpstreamRequestTimeout: 1,
+		Upstreams: []config.Upstream{
+			{
+				Name:            "upstream-1",
+				BaseURL:         "https://api.example.com",
+				Token:           "sk-test",
+				APIType:         config.APITypeAnthropic,
+				AvailableModels: []string{"claude-sonnet"},
+			},
+		},
+	}
+
+	h := NewAnthropicHandler(cfg)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{
+		"model":"claude-opus",
+		"messages":[{"role":"user","content":"hello"}]
+	}`))
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "No upstream supports model") {
+		t.Fatalf("body = %q, want no-upstream-support message", rec.Body.String())
+	}
 }

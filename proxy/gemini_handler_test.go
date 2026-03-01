@@ -2,7 +2,12 @@ package proxy
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/missdeer/aiproxy/config"
 )
 
 // ── parseGeminiPath tests ──────────────────────────────────────────────
@@ -525,4 +530,34 @@ func TestConvertOpenAIToGemini(t *testing.T) {
 			t.Fatal("expected error for invalid JSON")
 		}
 	})
+}
+
+func TestGeminiHandler_NoSupportedModel_NoFallback_ReturnsModelNotFound(t *testing.T) {
+	cfg := &config.Config{
+		UpstreamRequestTimeout: 1,
+		Upstreams: []config.Upstream{
+			{
+				Name:            "upstream-1",
+				BaseURL:         "https://api.example.com",
+				Token:           "sk-test",
+				APIType:         config.APITypeGemini,
+				AvailableModels: []string{"gemini-2.5-pro"},
+			},
+		},
+	}
+
+	h := NewGeminiHandler(cfg)
+	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.0-flash:generateContent", strings.NewReader(`{
+		"contents":[{"role":"user","parts":[{"text":"hello"}]}]
+	}`))
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "MODEL_NOT_FOUND") {
+		t.Fatalf("body = %q, want MODEL_NOT_FOUND", rec.Body.String())
+	}
 }

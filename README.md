@@ -13,6 +13,7 @@ Accepts requests in **Anthropic**, **OpenAI**, **Responses API**, or **Gemini** 
 - **Model Filtering** — Only route requests to upstreams that support the requested model
 - **Circuit Breaker** — Automatically mark failing upstreams as unavailable (3 consecutive failures per model), with auto-recovery after 30 minutes
 - **Automatic Failover** — Seamlessly retry failed requests on alternative upstreams
+- **Model Fallback Chain** — When all upstreams for a model are exhausted, automatically retry with a configured fallback model (e.g., `claude-opus-4-6` → `claude-opus-4-5` → `claude-sonnet-4-5`)
 - **OAuth Authentication** — Support for OAuth-based upstreams (Codex, Gemini CLI, Antigravity, Claude Code) with automatic token refresh
 - **Auth File Round-Robin** — Multiple auth files per upstream, rotated in round-robin fashion
 - **Streaming Support** — Full support for streaming responses across all protocols
@@ -87,6 +88,13 @@ upstreams:
       "gemini-3-pro": "gemini-3-pro-preview"
     available_models:
       - "gemini-3-pro"
+
+# Model fallback chain (optional)
+# When all upstreams fail for a model, retry with the fallback model
+model_fallback:
+  "claude-opus-4-6": "claude-opus-4-5"
+  "claude-opus-4-5": "claude-sonnet-4-5"
+  "gpt-5.3-codex": "gpt-5.2-codex"
 ```
 
 Compression behavior:
@@ -145,7 +153,8 @@ curl http://localhost:8080/v1beta/models/gemini-pro:generateContent \
 7. **Request Forwarding** — Request is sent to the selected upstream
 8. **Response Translation** — Upstream response is converted back to the client's expected format
 9. **Automatic Retry** — On 4xx/5xx errors, automatically tries the next upstream
-10. **Circuit Breaking** — After 3 consecutive failures per model, upstream is marked unavailable for 30 minutes
+10. **Model Fallback** — When all upstreams are exhausted, retry with the configured fallback model (full upstream re-rotation)
+11. **Circuit Breaking** — After 3 consecutive failures per model, upstream is marked unavailable for 30 minutes
 
 ## License
 

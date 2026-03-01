@@ -1,8 +1,13 @@
 package proxy
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/missdeer/aiproxy/config"
 )
 
 func TestConvertInputToChatMessages_PreservesMultimodalContentParts(t *testing.T) {
@@ -49,5 +54,36 @@ func TestConvertInputToChatMessages_PreservesArbitraryContentShape(t *testing.T)
 	}
 	if !reflect.DeepEqual(got[0]["content"], input[0].(map[string]any)["content"]) {
 		t.Fatalf("content was modified: got=%#v", got[0]["content"])
+	}
+}
+
+func TestResponsesHandler_NoSupportedModel_NoFallback_ReturnsModelNotFound(t *testing.T) {
+	cfg := &config.Config{
+		UpstreamRequestTimeout: 1,
+		Upstreams: []config.Upstream{
+			{
+				Name:            "upstream-1",
+				BaseURL:         "https://api.example.com",
+				Token:           "sk-test",
+				APIType:         config.APITypeResponses,
+				AvailableModels: []string{"gpt-4o"},
+			},
+		},
+	}
+
+	h := NewResponsesHandler(cfg)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+		"model":"gpt-5",
+		"input":"hello"
+	}`))
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "model_not_found") {
+		t.Fatalf("body = %q, want model_not_found", rec.Body.String())
 	}
 }

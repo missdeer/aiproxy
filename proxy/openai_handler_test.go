@@ -2,8 +2,14 @@ package proxy
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/missdeer/aiproxy/config"
 )
 
 // ── extractOpenAIPromptPreview tests ───────────────────────────────────
@@ -201,4 +207,124 @@ func TestConvertAnthropicToOpenAIResponse(t *testing.T) {
 			t.Fatal("expected error for invalid JSON")
 		}
 	})
+}
+
+func TestOpenAIHandler_NoSupportedModel_NoFallback_ReturnsModelNotFound(t *testing.T) {
+	cfg := &config.Config{
+		UpstreamRequestTimeout: 1,
+		Upstreams: []config.Upstream{
+			{
+				Name:            "upstream-1",
+				BaseURL:         "https://api.example.com",
+				Token:           "sk-test",
+				APIType:         config.APITypeOpenAI,
+				AvailableModels: []string{"gpt-4o"},
+			},
+		},
+	}
+
+	h := NewOpenAIHandler(cfg)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"gpt-5",
+		"messages":[{"role":"user","content":"hello"}]
+	}`))
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "model_not_found") {
+		t.Fatalf("body = %q, want model_not_found", rec.Body.String())
+	}
+}
+
+func TestOpenAIHandler_ModelFallback_Success(t *testing.T) {
+	modelCh := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		raw, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		_ = json.Unmarshal(raw, &req)
+		if m, ok := req["model"].(string); ok {
+			select {
+			case modelCh <- m:
+			default:
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{
+		UpstreamRequestTimeout: 5,
+		Upstreams: []config.Upstream{
+			{
+				Name:            "upstream-1",
+				BaseURL:         upstream.URL,
+				Token:           "sk-test",
+				APIType:         config.APITypeOpenAI,
+				AvailableModels: []string{"gpt-4o"},
+			},
+		},
+		ModelFallback: map[string]string{
+			"gpt-5": "gpt-4o",
+		},
+	}
+
+	h := NewOpenAIHandler(cfg)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`))
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	select {
+	case got := <-modelCh:
+		if got != "gpt-4o" {
+			t.Fatalf("forwarded model = %q, want %q", got, "gpt-4o")
+		}
+	default:
+		t.Fatal("upstream did not receive request")
+	}
+}
+
+func TestOpenAIHandler_ModelFallback_CycleTerminates(t *testing.T) {
+	cfg := &config.Config{
+		UpstreamRequestTimeout: 1,
+		Upstreams: []config.Upstream{
+			{
+				Name:            "upstream-1",
+				BaseURL:         "https://api.example.com",
+				Token:           "sk-test",
+				APIType:         config.APITypeOpenAI,
+				AvailableModels: []string{"gpt-4o"},
+			},
+		},
+		ModelFallback: map[string]string{
+			"gpt-5":   "gpt-4.1",
+			"gpt-4.1": "gpt-5",
+		},
+	}
+
+	h := NewOpenAIHandler(cfg)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`))
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		h.ServeHTTP(rec, req)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ServeHTTP did not return; possible fallback loop")
+	}
 }

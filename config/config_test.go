@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -418,6 +419,122 @@ upstreams:
 			if cfg.Upstreams[0].AuthFiles[i] != w {
 				t.Errorf("AuthFiles[%d] = %q, want %q", i, cfg.Upstreams[0].AuthFiles[i], w)
 			}
+		}
+	})
+}
+
+func TestModelFallback(t *testing.T) {
+	t.Run("parses from YAML", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+		configContent := `
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+model_fallback:
+  "claude-opus-4-6": "claude-opus-4-5"
+  "claude-opus-4-5": "claude-sonnet-4-5"
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.ModelFallback) != 2 {
+			t.Fatalf("ModelFallback count = %d, want 2", len(cfg.ModelFallback))
+		}
+		if got := cfg.GetModelFallback("claude-opus-4-6"); got != "claude-opus-4-5" {
+			t.Errorf("GetModelFallback(claude-opus-4-6) = %q, want %q", got, "claude-opus-4-5")
+		}
+		if got := cfg.GetModelFallback("claude-opus-4-5"); got != "claude-sonnet-4-5" {
+			t.Errorf("GetModelFallback(claude-opus-4-5) = %q, want %q", got, "claude-sonnet-4-5")
+		}
+	})
+
+	t.Run("returns empty for unknown model", func(t *testing.T) {
+		cfg := &Config{
+			ModelFallback: map[string]string{"a": "b"},
+		}
+		if got := cfg.GetModelFallback("unknown"); got != "" {
+			t.Errorf("GetModelFallback(unknown) = %q, want empty", got)
+		}
+	})
+
+	t.Run("nil map returns empty", func(t *testing.T) {
+		cfg := &Config{}
+		if got := cfg.GetModelFallback("any"); got != "" {
+			t.Errorf("GetModelFallback on nil map = %q, want empty", got)
+		}
+	})
+
+	t.Run("nil config returns empty", func(t *testing.T) {
+		var cfg *Config
+		if got := cfg.GetModelFallback("any"); got != "" {
+			t.Errorf("GetModelFallback on nil config = %q, want empty", got)
+		}
+	})
+
+	t.Run("rejects cycle", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+		configContent := `
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+model_fallback:
+  "a": "b"
+  "b": "a"
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(configPath)
+		if err == nil || !strings.Contains(err.Error(), "cycle") {
+			t.Fatalf("Load() err = %v, want cycle validation error", err)
+		}
+	})
+
+	t.Run("rejects empty fallback target", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+		configContent := `
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+model_fallback:
+  "a": ""
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(configPath)
+		if err == nil || !strings.Contains(err.Error(), "empty fallback") {
+			t.Fatalf("Load() err = %v, want empty fallback validation error", err)
+		}
+	})
+
+	t.Run("rejects empty source model", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+		configContent := `
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+model_fallback:
+  "": "gpt-4o"
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(configPath)
+		if err == nil || !strings.Contains(err.Error(), "empty source") {
+			t.Fatalf("Load() err = %v, want empty source validation error", err)
 		}
 	})
 }

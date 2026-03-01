@@ -78,3 +78,7 @@ See `config.example.yaml` for full example. Key fields:
 - **Streaming support**: Full SSE streaming support across all protocols
 - **Config hot-reload**: Config file changes are watched and applied without restart
 - **Rotating file logging**: Optional file-based logging with automatic rotation by size/age
+
+## Notice
+
+- Never use `/tmp` to store any files, use relative path instead
