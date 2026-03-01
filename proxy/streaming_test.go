@@ -639,8 +639,8 @@ func TestHandleStreamResponse_ErrorReadFailure(t *testing.T) {
 // ── StreamCapableSender type assertion tests ──────────────────────────
 
 func TestStreamCapableSender_TypeAssertions(t *testing.T) {
-	// Verify that exactly the 4 target senders implement StreamCapableSender
-	// and the 4 non-target senders don't.
+	// Verify that exactly the target senders implement StreamCapableSender
+	// and the non-target senders don't.
 	tests := []struct {
 		name     string
 		sender   OutboundSender
@@ -650,6 +650,7 @@ func TestStreamCapableSender_TypeAssertions(t *testing.T) {
 		{"GeminiCLISender", &GeminiCLISender{}, true},
 		{"AntigravitySender", &AntigravitySender{}, true},
 		{"ClaudeCodeSender", &ClaudeCodeSender{}, true},
+		{"KiroSender", &KiroSender{}, true},
 		{"OpenAISender", &OpenAISender{}, false},
 		{"AnthropicSender", &AnthropicSender{}, false},
 		{"GeminiSender", &GeminiSender{}, false},

@@ -45,6 +45,8 @@ func GetOutboundSender(apiType config.APIType) OutboundSender {
 		return &AntigravitySender{}
 	case config.APITypeClaudeCode:
 		return &ClaudeCodeSender{}
+	case config.APITypeKiro:
+		return &KiroSender{}
 	default:
 		return &AnthropicSender{} // fallback
 	}
@@ -276,7 +278,27 @@ func (s *ClaudeCodeSender) SendStream(client *http.Client, upstream config.Upstr
 	return resp, config.APITypeAnthropic, nil
 }
 
-// ── Shared HTTP helper ──────────────────────────────────────────────────
+// ── KiroSender ────────────────────────────────────────────────────────
+
+type KiroSender struct{}
+
+func (s *KiroSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
+	status, respBody, respHeaders, err := ForwardToKiro(client, upstream, canonicalBody, stream)
+	if err != nil {
+		return status, nil, nil, "", err
+	}
+	return status, respBody, respHeaders, config.APITypeAnthropic, nil
+}
+
+func (s *KiroSender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
+	resp, err := ForwardToKiroStream(client, upstream, canonicalBody, originalReq.Context())
+	if err != nil {
+		return nil, "", err
+	}
+	return resp, config.APITypeAnthropic, nil
+}
+
+// ── Shared HTTP helper ─────────────────────────���────────────────────────
 
 // HandleStreamResponse processes a raw *http.Response for streaming passthrough.
 // On error status (>= 400), reads the body and returns buffered error response.

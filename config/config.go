@@ -26,6 +26,7 @@ const (
 	APITypeGeminiCLI   APIType = "geminicli"   // cloudcode-pa.googleapis.com/v1internal:streamGenerateContent (OAuth)
 	APITypeAntigravity APIType = "antigravity" // daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent (OAuth)
 	APITypeClaudeCode  APIType = "claudecode"  // api.anthropic.com/v1/messages (OAuth)
+	APITypeKiro        APIType = "kiro"        // codewhisperer/q.amazonaws.com (OAuth, AWS Event Stream)
 )
 
 type Upstream struct {
