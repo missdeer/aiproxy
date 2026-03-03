@@ -16,8 +16,23 @@ import (
 	"github.com/google/uuid"
 	"github.com/missdeer/aiproxy/config"
 	"github.com/missdeer/aiproxy/oauthcache"
-	"github.com/missdeer/aiproxy/upstreammeta"
 )
+
+const kiroVersion = "0.7.45"
+
+func kiroUserAgent(machineId string) string {
+	if machineId != "" {
+		return fmt.Sprintf("aws-sdk-js/1.0.27 ua/2.1 os/linux lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E KiroIDE-%s-%s", kiroVersion, machineId)
+	}
+	return fmt.Sprintf("aws-sdk-js/1.0.27 ua/2.1 os/linux lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E KiroIDE-%s", kiroVersion)
+}
+
+func kiroAmzUserAgent(machineId string) string {
+	if machineId != "" {
+		return fmt.Sprintf("aws-sdk-js/1.0.27 KiroIDE %s %s", kiroVersion, machineId)
+	}
+	return fmt.Sprintf("aws-sdk-js/1.0.27 KiroIDE %s", kiroVersion)
+}
 
 type kiroEndpoint struct {
 	URL       string
@@ -796,8 +811,8 @@ func buildKiroRequest(upstream config.Upstream, body []byte, accessToken string,
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("X-Amz-Target", ep.AmzTarget)
-	req.Header.Set("User-Agent", upstreammeta.KiroUserAgent(storage.MachineId))
-	req.Header.Set("X-Amz-User-Agent", upstreammeta.KiroAmzUserAgent(storage.MachineId))
+	req.Header.Set("User-Agent", kiroUserAgent(storage.MachineId))
+	req.Header.Set("X-Amz-User-Agent", kiroAmzUserAgent(storage.MachineId))
 	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
 	req.Header.Set("x-amzn-codewhisperer-optout", "true")
 	req.Header.Set("Amz-Sdk-Request", "attempt=1; max=3")
