@@ -40,6 +40,8 @@ func newHTTPClient(responseHeaderTimeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = responseHeaderTimeout
 	transport.DisableCompression = true
+	transport.MaxIdleConnsPerHost = 20
+	transport.MaxIdleConns = 200
 	return &http.Client{
 		Transport: &middleware.CompressedTransport{Base: transport},
 	}
