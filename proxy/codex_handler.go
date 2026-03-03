@@ -26,7 +26,6 @@ import (
 
 	"github.com/missdeer/aiproxy/config"
 	"github.com/missdeer/aiproxy/oauthcache"
-	"github.com/missdeer/aiproxy/upstreammeta"
 )
 
 // ── OAuth / API constants ──────────────────────────────────────────────
@@ -37,6 +36,7 @@ const (
 	codexRefreshScope = "openid profile email"
 	codexBaseURL      = "https://chatgpt.com/backend-api/codex"
 	codexVersion      = "0.106.0"
+	codexUserAgent    = "codex_cli_rs/0.106.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464"
 )
 
 // ── Data structures ────────────────────────────────────────────────────
@@ -147,7 +147,7 @@ func buildCodexRequest(client *http.Client, upstream config.Upstream, body []byt
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", upstreammeta.UserAgentCodexCLI)
+	req.Header.Set("User-Agent", codexUserAgent)
 	req.Header.Set("Version", codexVersion)
 	req.Header.Set("Originator", "codex_cli_rs")
 	req.Header.Set("Connection", "Keep-Alive")

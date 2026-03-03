@@ -24,7 +24,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/missdeer/aiproxy/config"
 	"github.com/missdeer/aiproxy/oauthcache"
-	"github.com/missdeer/aiproxy/upstreammeta"
 	"github.com/tidwall/gjson"
 )
 
@@ -37,6 +36,7 @@ const (
 	antigravityBase              = "https://daily-cloudcode-pa.googleapis.com"
 	antigravityStreamPath        = "/v1internal:streamGenerateContent"
 	antigravitySystemInstruction = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"
+	antigravityUserAgent         = "antigravity/1.19.6 Darwin/arm64"
 )
 
 // ── Data structures ────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ func buildAntigravityRequest(upstream config.Upstream, body []byte, accessToken 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", upstreammeta.UserAgentAntigravity)
+	req.Header.Set("User-Agent", antigravityUserAgent)
 	ApplyAcceptEncoding(req, upstream)
 	if _, err := ApplyBodyCompression(req, body, upstream); err != nil {
 		return nil, fmt.Errorf("request body compression: %w", err)
@@ -390,7 +390,7 @@ func antigravityFetchProjectID(client *http.Client, accessToken string) (string,
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("User-Agent", upstreammeta.UserAgentAntigravity)
+	req.Header.Set("User-Agent", antigravityUserAgent)
 
 	resp, err := client.Do(req)
 	if err != nil {
