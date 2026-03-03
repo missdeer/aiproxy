@@ -169,6 +169,11 @@ func buildCodexRequest(client *http.Client, upstream config.Upstream, body []byt
 // The Codex API always uses SSE streaming; when clientWantsStream is false,
 // the SSE output is reassembled into a single Responses-format JSON response.
 func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
+	return ForwardToCodexWithContext(client, upstream, requestBody, context.Background(), clientWantsStream)
+}
+
+// ForwardToCodexWithContext is context-aware variant of ForwardToCodex.
+func ForwardToCodexWithContext(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context, clientWantsStream bool) (int, []byte, http.Header, error) {
 	basePayload, err := buildCodexBasePayload(requestBody)
 	if err != nil {
 		return 0, nil, nil, err
@@ -180,7 +185,7 @@ func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody [
 			return buildCodexRequest(client, u, body, token, storage, ctx)
 		},
 		ConvertSSE: codexSSEToResponsesJSON,
-	}, client, upstream, basePayload, clientWantsStream)
+	}, client, upstream, basePayload, ctx, clientWantsStream)
 }
 
 // ForwardToCodexStream sends a streaming request to the Codex upstream

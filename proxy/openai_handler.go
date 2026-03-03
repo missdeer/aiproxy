@@ -170,6 +170,11 @@ func (h *OpenAIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				status, respBody, respHeaders, streamResp, err := h.forwardRequest(upstream, mappedModel, body, req.Stream, r)
 				if err != nil {
 					log.Printf("[ERROR] Upstream %s connection error: %v", upstream.Name, err)
+					// Client disconnected — stop retrying immediately
+					if r.Context().Err() != nil {
+						log.Printf("[INFO] Client disconnected, aborting retry")
+						return
+					}
 					if h.balancer.RecordFailure(upstream.Name, currentModel) {
 						log.Printf("[CIRCUIT] Upstream %s model %s marked as unavailable after %d consecutive failures", upstream.Name, currentModel, 3)
 					}
@@ -242,6 +247,11 @@ func (h *OpenAIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 	tryFallback:
+		// Client disconnected — don't attempt fallback models
+		if r.Context().Err() != nil {
+			log.Printf("[INFO] Client disconnected, aborting fallback")
+			return
+		}
 		// Check for model fallback
 		h.mu.RLock()
 		fallback := h.cfg.GetModelFallback(currentModel)

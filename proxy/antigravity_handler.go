@@ -211,6 +211,11 @@ func buildAntigravityRequest(upstream config.Upstream, body []byte, accessToken 
 // The Antigravity API always uses SSE streaming; when clientWantsStream is false,
 // the SSE output is reassembled into a single Responses-format JSON response.
 func ForwardToAntigravity(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
+	return ForwardToAntigravityWithContext(client, upstream, requestBody, context.Background(), clientWantsStream)
+}
+
+// ForwardToAntigravityWithContext is context-aware variant of ForwardToAntigravity.
+func ForwardToAntigravityWithContext(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context, clientWantsStream bool) (int, []byte, http.Header, error) {
 	basePayload, _, _, err := buildAntigravityBasePayload(requestBody)
 	if err != nil {
 		return 0, nil, nil, err
@@ -234,7 +239,7 @@ func ForwardToAntigravity(client *http.Client, upstream config.Upstream, request
 			return buildAntigravityRequest(u, body, token, ctx)
 		},
 		ConvertSSE: antigravitySSEToResponsesJSON,
-	}, client, upstream, basePayload, clientWantsStream)
+	}, client, upstream, basePayload, ctx, clientWantsStream)
 }
 
 // ForwardToAntigravityStream sends a streaming request to the Antigravity upstream

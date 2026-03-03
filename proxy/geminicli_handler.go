@@ -245,6 +245,11 @@ func buildGeminiCLIRequest(upstream config.Upstream, body []byte, accessToken st
 // The Gemini CLI API always uses SSE streaming; when clientWantsStream is false,
 // the SSE output is reassembled into a single Responses-format JSON response.
 func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
+	return ForwardToGeminiCLIWithContext(client, upstream, requestBody, context.Background(), clientWantsStream)
+}
+
+// ForwardToGeminiCLIWithContext is context-aware variant of ForwardToGeminiCLI.
+func ForwardToGeminiCLIWithContext(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context, clientWantsStream bool) (int, []byte, http.Header, error) {
 	basePayload, _, err := buildGeminiCLIBasePayload(requestBody)
 	if err != nil {
 		return 0, nil, nil, err
@@ -267,7 +272,7 @@ func ForwardToGeminiCLI(client *http.Client, upstream config.Upstream, requestBo
 			return buildGeminiCLIRequest(u, body, token, ctx)
 		},
 		ConvertSSE: geminiCLISSEToResponsesJSON,
-	}, client, upstream, basePayload, clientWantsStream)
+	}, client, upstream, basePayload, ctx, clientWantsStream)
 }
 
 // ForwardToGeminiCLIStream sends a streaming request to the Gemini CLI upstream

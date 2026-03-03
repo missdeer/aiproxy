@@ -569,8 +569,17 @@ func normalizeChunk(chunk string, previous *string) string {
 // ForwardToKiro sends a request to the Kiro upstream with auth retry and dual-endpoint fallback.
 // Returns Anthropic-format JSON.
 func ForwardToKiro(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
+	return ForwardToKiroWithContext(client, upstream, requestBody, context.Background(), clientWantsStream)
+}
+
+// ForwardToKiroWithContext is context-aware variant of ForwardToKiro.
+func ForwardToKiroWithContext(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context, clientWantsStream bool) (int, []byte, http.Header, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	if clientWantsStream {
-		resp, err := ForwardToKiroStream(client, upstream, requestBody, context.Background())
+		resp, err := ForwardToKiroStream(client, upstream, requestBody, ctx)
 		if err != nil {
 			return 0, nil, nil, err
 		}
@@ -605,6 +614,10 @@ func ForwardToKiro(client *http.Client, upstream config.Upstream, requestBody []
 	var lastHeaders http.Header
 
 	for i, attempt := range attempts {
+		if err := ctx.Err(); err != nil {
+			return 0, nil, nil, err
+		}
+
 		token, storage, err := kiroAuthManager.GetToken(attempt.AuthFile, timeout)
 		if err != nil {
 			log.Printf("[KIRO] Auth file %s (%d/%d): %v", attempt.AuthFile, i+1, len(attempts), err)
@@ -620,6 +633,10 @@ func ForwardToKiro(client *http.Client, upstream config.Upstream, requestBody []
 
 		var endpointErr error
 		for _, ep := range endpoints {
+			if err := ctx.Err(); err != nil {
+				return 0, nil, nil, err
+			}
+
 			body, buildErr := buildKiroPayload(requestBody, ep)
 			if buildErr != nil {
 				endpointErr = buildErr
@@ -631,10 +648,14 @@ func ForwardToKiro(client *http.Client, upstream config.Upstream, requestBody []
 				endpointErr = buildErr
 				break
 			}
+			req = req.WithContext(ctx)
 
 			resp, doErr := client.Do(req)
 			if doErr != nil {
 				log.Printf("[KIRO] Endpoint %s failed: %v", ep.Name, doErr)
+				if ctx.Err() != nil {
+					return 0, nil, nil, ctx.Err()
+				}
 				endpointErr = doErr
 				continue
 			}
@@ -703,6 +724,10 @@ func ForwardToKiro(client *http.Client, upstream config.Upstream, requestBody []
 // ForwardToKiroStream sends a streaming request and returns *http.Response
 // with body replaced by kiroEventStreamToSSEReader.
 func ForwardToKiroStream(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	attempts, err := iterAuthFiles(upstream)
 	if err != nil {
 		return nil, err
@@ -713,6 +738,10 @@ func ForwardToKiroStream(client *http.Client, upstream config.Upstream, requestB
 	var lastResp *http.Response
 
 	for i, attempt := range attempts {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		token, storage, err := kiroAuthManager.GetToken(attempt.AuthFile, timeout)
 		if err != nil {
 			log.Printf("[KIRO] Auth file %s (%d/%d): %v", attempt.AuthFile, i+1, len(attempts), err)
@@ -728,6 +757,10 @@ func ForwardToKiroStream(client *http.Client, upstream config.Upstream, requestB
 
 		var endpointErr error
 		for _, ep := range endpoints {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+
 			body, buildErr := buildKiroPayload(requestBody, ep)
 			if buildErr != nil {
 				endpointErr = buildErr
@@ -744,6 +777,9 @@ func ForwardToKiroStream(client *http.Client, upstream config.Upstream, requestB
 			resp, doErr := client.Do(req)
 			if doErr != nil {
 				log.Printf("[KIRO] Endpoint %s failed: %v", ep.Name, doErr)
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
 				endpointErr = doErr
 				continue
 			}

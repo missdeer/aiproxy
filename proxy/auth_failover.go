@@ -60,6 +60,7 @@ func forwardWithAuthRetry[S any](
 	client *http.Client,
 	upstream config.Upstream,
 	basePayload map[string]any,
+	ctx context.Context,
 	clientWantsStream bool,
 ) (int, []byte, http.Header, error) {
 	if cfg.Manager == nil {
@@ -67,6 +68,9 @@ func forwardWithAuthRetry[S any](
 	}
 	if cfg.BuildReq == nil {
 		return 0, nil, nil, fmt.Errorf("%s invalid config: BuildReq is nil", cfg.Label)
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	attempts, err := iterAuthFiles(upstream)
@@ -81,6 +85,10 @@ func forwardWithAuthRetry[S any](
 	var lastHeaders http.Header
 
 	for i, attempt := range attempts {
+		if err := ctx.Err(); err != nil {
+			return 0, nil, nil, err
+		}
+
 		token, storage, err := cfg.Manager.GetToken(attempt.AuthFile, timeout)
 		if err != nil {
 			log.Printf("%s Auth file %s (%d/%d): %v", cfg.Label, attempt.AuthFile, i+1, len(attempts), err)
@@ -107,7 +115,7 @@ func forwardWithAuthRetry[S any](
 			continue
 		}
 
-		req, err := cfg.BuildReq(upstream, body, token, storage, context.Background())
+		req, err := cfg.BuildReq(upstream, body, token, storage, ctx)
 		if err != nil {
 			lastErr = err
 			continue
@@ -116,6 +124,9 @@ func forwardWithAuthRetry[S any](
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("%s Auth file %s (%d/%d): request failed: %v", cfg.Label, attempt.AuthFile, i+1, len(attempts), err)
+			if ctx.Err() != nil {
+				return 0, nil, nil, ctx.Err()
+			}
 			lastErr = err
 			lastStatus = http.StatusBadGateway
 			continue
@@ -180,6 +191,9 @@ func forwardStreamWithAuthRetry[S any](
 	if cfg.BuildReq == nil {
 		return nil, fmt.Errorf("%s invalid config: BuildReq is nil", cfg.Label)
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	attempts, err := iterAuthFiles(upstream)
 	if err != nil {
@@ -191,6 +205,10 @@ func forwardStreamWithAuthRetry[S any](
 	var lastResp *http.Response
 
 	for i, attempt := range attempts {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		token, storage, err := cfg.Manager.GetToken(attempt.AuthFile, timeout)
 		if err != nil {
 			log.Printf("%s Auth file %s (%d/%d): %v", cfg.Label, attempt.AuthFile, i+1, len(attempts), err)
@@ -226,6 +244,9 @@ func forwardStreamWithAuthRetry[S any](
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("%s Auth file %s (%d/%d): request failed: %v", cfg.Label, attempt.AuthFile, i+1, len(attempts), err)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			lastErr = err
 			continue
 		}

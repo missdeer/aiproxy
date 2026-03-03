@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -163,7 +164,11 @@ type CodexSender struct{}
 
 func (s *CodexSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
 	// Codex uses Responses format natively, delegate to ForwardToCodex
-	status, respBody, respHeaders, err := ForwardToCodex(client, upstream, canonicalBody, stream)
+	ctx := context.Background()
+	if originalReq != nil {
+		ctx = originalReq.Context()
+	}
+	status, respBody, respHeaders, err := ForwardToCodexWithContext(client, upstream, canonicalBody, ctx, stream)
 	if err != nil {
 		return status, nil, nil, "", err
 	}
@@ -185,7 +190,11 @@ type GeminiCLISender struct{}
 
 func (s *GeminiCLISender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
 	// GeminiCLI uses Responses format natively, delegate to ForwardToGeminiCLI
-	status, respBody, respHeaders, err := ForwardToGeminiCLI(client, upstream, canonicalBody, stream)
+	ctx := context.Background()
+	if originalReq != nil {
+		ctx = originalReq.Context()
+	}
+	status, respBody, respHeaders, err := ForwardToGeminiCLIWithContext(client, upstream, canonicalBody, ctx, stream)
 	if err != nil {
 		return status, nil, nil, "", err
 	}
@@ -212,7 +221,11 @@ type AntigravitySender struct{}
 
 func (s *AntigravitySender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
 	// Antigravity uses Responses format natively, delegate to ForwardToAntigravity
-	status, respBody, respHeaders, err := ForwardToAntigravity(client, upstream, canonicalBody, stream)
+	ctx := context.Background()
+	if originalReq != nil {
+		ctx = originalReq.Context()
+	}
+	status, respBody, respHeaders, err := ForwardToAntigravityWithContext(client, upstream, canonicalBody, ctx, stream)
 	if err != nil {
 		return status, nil, nil, "", err
 	}
@@ -251,7 +264,11 @@ func (s *ClaudeCodeSender) Send(client *http.Client, upstream config.Upstream, c
 	}
 
 	// ForwardToClaudeCode returns Anthropic-format data
-	status, respBody, respHeaders, err := ForwardToClaudeCode(client, upstream, modifiedBody, stream)
+	ctx := context.Background()
+	if originalReq != nil {
+		ctx = originalReq.Context()
+	}
+	status, respBody, respHeaders, err := ForwardToClaudeCodeWithContext(client, upstream, modifiedBody, ctx, stream)
 	if err != nil {
 		return status, nil, nil, "", err
 	}
@@ -283,7 +300,11 @@ func (s *ClaudeCodeSender) SendStream(client *http.Client, upstream config.Upstr
 type KiroSender struct{}
 
 func (s *KiroSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
-	status, respBody, respHeaders, err := ForwardToKiro(client, upstream, canonicalBody, stream)
+	ctx := context.Background()
+	if originalReq != nil {
+		ctx = originalReq.Context()
+	}
+	status, respBody, respHeaders, err := ForwardToKiroWithContext(client, upstream, canonicalBody, ctx, stream)
 	if err != nil {
 		return status, nil, nil, "", err
 	}
