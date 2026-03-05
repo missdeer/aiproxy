@@ -87,3 +87,75 @@ func TestResponsesHandler_NoSupportedModel_NoFallback_ReturnsModelNotFound(t *te
 		t.Fatalf("body = %q, want model_not_found", rec.Body.String())
 	}
 }
+
+func TestResponsesRouteReachability(t *testing.T) {
+	cfg := &config.Config{
+		UpstreamRequestTimeout: 1,
+		Upstreams: []config.Upstream{
+			{
+				Name:            "test-upstream",
+				BaseURL:         "https://api.example.com",
+				Token:           "sk-test",
+				APIType:         config.APITypeResponses,
+				AvailableModels: []string{"gpt-4o"},
+			},
+		},
+	}
+
+	handler := NewResponsesHandler(cfg)
+
+	// Build a ServeMux identical to main.go route registration
+	mux := http.NewServeMux()
+	mux.Handle("POST /v1/responses", handler)
+	mux.Handle("POST /v1/responses/compact", handler)
+
+	tests := []struct {
+		name       string
+		path       string
+		wantStatus int // exact match for 404; "not 404" for reachable routes
+		exact404   bool
+	}{
+		{
+			name:       "POST /v1/responses reaches handler",
+			path:       "/v1/responses",
+			wantStatus: http.StatusBadRequest, // handler returns model_not_found for unknown model
+			exact404:   false,
+		},
+		{
+			name:       "POST /v1/responses/compact reaches handler",
+			path:       "/v1/responses/compact",
+			wantStatus: http.StatusBadRequest,
+			exact404:   false,
+		},
+		{
+			name:       "POST /v1/responses/v1/messages returns 404",
+			path:       "/v1/responses/v1/messages",
+			wantStatus: http.StatusNotFound,
+			exact404:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"model":"nonexistent-model","input":"hello"}`
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			mux.ServeHTTP(rec, req)
+
+			if tc.exact404 {
+				if rec.Code != http.StatusNotFound {
+					t.Fatalf("status = %d, want %d (route should NOT be reachable)", rec.Code, http.StatusNotFound)
+				}
+			} else {
+				if rec.Code == http.StatusNotFound {
+					t.Fatalf("status = 404, route should be reachable (expected handler to process request)")
+				}
+				if rec.Code != tc.wantStatus {
+					t.Fatalf("status = %d, want %d", rec.Code, tc.wantStatus)
+				}
+			}
+		})
+	}
+}

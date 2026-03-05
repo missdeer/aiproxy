@@ -29,7 +29,7 @@ Accepts requests in **Anthropic**, **OpenAI**, **Responses API**, or **Gemini** 
 | `anthropic` | Anthropic Messages | API key (`token`) | `/v1/messages` |
 | `openai` | OpenAI Chat Completions | API key (`token`) | `/v1/chat/completions` |
 | `gemini` | Google Gemini | API key (`token`) | `/v1beta/models/*/generateContent` |
-| `responses` | OpenAI Responses | API key (`token`) | `/v1/responses` |
+| `responses` | OpenAI Responses | API key (`token`) | `/v1/responses`, `/v1/responses/compact` |
 | `codex` | ChatGPT Codex | OAuth (`auth_files`) | `chatgpt.com/backend-api/codex/responses` |
 | `geminicli` | Gemini CLI | OAuth (`auth_files`) | `cloudcode-pa.googleapis.com` |
 | `antigravity` | Antigravity | OAuth (`auth_files`) | `daily-cloudcode-pa.googleapis.com` |
@@ -112,7 +112,7 @@ Start the proxy:
 ./aiproxy -config config.yaml
 ```
 
-The proxy exposes five client-facing endpoints:
+The proxy exposes the following client-facing endpoints (only explicitly listed paths are supported; arbitrary sub-paths are **not** forwarded):
 
 ```bash
 # Anthropic Messages API
