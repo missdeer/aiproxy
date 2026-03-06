@@ -377,7 +377,9 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 
 	// Send via OutboundSender
 	sender := GetOutboundSender(apiType)
-
+	if sender == nil {
+		return 0, nil, nil, nil, fmt.Errorf("unsupported outbound API type: %s", apiType)
+	}
 	// Streaming fast path: if sender supports SendStream and client wants streaming,
 	// try to get the raw response for PipeStream passthrough.
 	if isStream {
@@ -994,4 +996,40 @@ func (h *GeminiCompatHandler) UpdateConfig(cfg *config.Config) {
 
 func (h *GeminiCompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.handler.ServeHTTP(w, r)
+}
+
+// ── GeminiSender ────────────────────────────────────────────────────────
+
+func init() {
+	RegisterOutboundSender(config.APITypeGemini, func() OutboundSender { return &GeminiSender{} })
+}
+
+type GeminiSender struct{}
+
+func (s *GeminiSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
+	// Convert Responses format to Gemini format
+	var bodyMap map[string]any
+	if err := json.Unmarshal(canonicalBody, &bodyMap); err != nil {
+		return 0, nil, nil, "", err
+	}
+
+	model, _ := bodyMap["model"].(string)
+
+	geminiBody := convertResponsesToGeminiRequest(bodyMap)
+	modifiedBody, err := json.Marshal(geminiBody)
+	if err != nil {
+		return 0, nil, nil, "", err
+	}
+
+	action := "generateContent"
+	if stream {
+		action = "streamGenerateContent"
+	}
+	url := fmt.Sprintf("%s/v1beta/models/%s:%s", strings.TrimSuffix(upstream.BaseURL, "/"), model, action)
+
+	status, respBody, headers, err := doHTTPRequest(client, url, modifiedBody, upstream, config.APITypeGemini, originalReq, "")
+	if err != nil {
+		return 0, nil, nil, "", err
+	}
+	return status, respBody, headers, config.APITypeGemini, nil
 }

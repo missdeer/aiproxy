@@ -1450,3 +1450,31 @@ func kiroSaveStorage(path string, s *KiroTokenStorage) error {
 	data = append(data, '\n')
 	return os.WriteFile(path, data, 0644)
 }
+
+// ── KiroSender ────────────────────────────────────────────────────────
+
+func init() {
+	RegisterOutboundSender(config.APITypeKiro, func() OutboundSender { return &KiroSender{} })
+}
+
+type KiroSender struct{}
+
+func (s *KiroSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
+	ctx := context.Background()
+	if originalReq != nil {
+		ctx = originalReq.Context()
+	}
+	status, respBody, respHeaders, err := ForwardToKiroWithContext(client, upstream, canonicalBody, ctx, stream)
+	if err != nil {
+		return status, nil, nil, "", err
+	}
+	return status, respBody, respHeaders, config.APITypeAnthropic, nil
+}
+
+func (s *KiroSender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
+	resp, err := ForwardToKiroStream(client, upstream, canonicalBody, originalReq.Context())
+	if err != nil {
+		return nil, "", err
+	}
+	return resp, config.APITypeAnthropic, nil
+}

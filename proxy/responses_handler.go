@@ -360,7 +360,9 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 
 	// Send via OutboundSender
 	sender := GetOutboundSender(apiType)
-
+	if sender == nil {
+		return 0, nil, nil, nil, fmt.Errorf("unsupported outbound API type: %s", apiType)
+	}
 	// Streaming fast path: if sender supports SendStream and client wants streaming,
 	// try to get the raw response for PipeStream passthrough.
 	if clientWantsStream {
@@ -1212,4 +1214,32 @@ func (h *ResponsesHandler) processGeminiStreamEvent(event map[string]any, messag
 	}
 
 	return nil
+}
+
+// ── ResponsesSender ─────────────────────────────────────────────────────
+
+func init() {
+	RegisterOutboundSender(config.APITypeResponses, func() OutboundSender { return &ResponsesSender{} })
+}
+
+type ResponsesSender struct{}
+
+func (s *ResponsesSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
+	// Native Responses format - no conversion needed.
+	// For translated inbound protocols we always target the canonical
+	// /v1/responses endpoint on the upstream; path-based variants such as
+	// /v1/responses/compact are only preserved by the inbound Responses handler.
+	url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
+
+	// Pass through query parameters for native format
+	rawQuery := ""
+	if originalReq.URL.RawQuery != "" {
+		rawQuery = originalReq.URL.RawQuery
+	}
+
+	status, respBody, headers, err := doHTTPRequest(client, url, canonicalBody, upstream, config.APITypeResponses, originalReq, rawQuery)
+	if err != nil {
+		return 0, nil, nil, "", err
+	}
+	return status, respBody, headers, config.APITypeResponses, nil
 }

@@ -498,3 +498,38 @@ func antigravitySaveStorage(path string, s *AntigravityTokenStorage) error {
 	data = append(data, '\n')
 	return os.WriteFile(path, data, 0644)
 }
+
+// ── AntigravitySender ───────────────────────────────────────────────────
+
+func init() {
+	RegisterOutboundSender(config.APITypeAntigravity, func() OutboundSender { return &AntigravitySender{} })
+}
+
+type AntigravitySender struct{}
+
+func (s *AntigravitySender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
+	// Antigravity uses Responses format natively, delegate to ForwardToAntigravity
+	ctx := context.Background()
+	if originalReq != nil {
+		ctx = originalReq.Context()
+	}
+	status, respBody, respHeaders, err := ForwardToAntigravityWithContext(client, upstream, canonicalBody, ctx, stream)
+	if err != nil {
+		return status, nil, nil, "", err
+	}
+
+	// Streaming returns native Gemini SSE; non-streaming returns Responses JSON
+	respFormat := config.APITypeResponses
+	if stream {
+		respFormat = config.APITypeGemini
+	}
+	return status, respBody, respHeaders, respFormat, nil
+}
+
+func (s *AntigravitySender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
+	resp, err := ForwardToAntigravityStream(client, upstream, canonicalBody, originalReq.Context())
+	if err != nil {
+		return nil, "", err
+	}
+	return resp, config.APITypeGemini, nil
+}

@@ -368,3 +368,33 @@ func codexSaveStorage(path string, s *CodexTokenStorage) error {
 	data = append(data, '\n')
 	return os.WriteFile(path, data, 0644)
 }
+
+// ── CodexSender ─────────────────────────────────────────────────────────
+
+func init() {
+	RegisterOutboundSender(config.APITypeCodex, func() OutboundSender { return &CodexSender{} })
+}
+
+type CodexSender struct{}
+
+func (s *CodexSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
+	// Codex uses Responses format natively, delegate to ForwardToCodex
+	ctx := context.Background()
+	if originalReq != nil {
+		ctx = originalReq.Context()
+	}
+	status, respBody, respHeaders, err := ForwardToCodexWithContext(client, upstream, canonicalBody, ctx, stream)
+	if err != nil {
+		return status, nil, nil, "", err
+	}
+
+	return status, respBody, respHeaders, config.APITypeResponses, nil
+}
+
+func (s *CodexSender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
+	resp, err := ForwardToCodexStream(client, upstream, canonicalBody, originalReq.Context())
+	if err != nil {
+		return nil, "", err
+	}
+	return resp, config.APITypeResponses, nil
+}

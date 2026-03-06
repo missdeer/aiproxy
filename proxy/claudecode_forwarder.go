@@ -470,3 +470,56 @@ func claudeCodeSaveStorage(path string, s *ClaudeCodeTokenStorage) error {
 	data = append(data, '\n')
 	return os.WriteFile(path, data, 0644)
 }
+
+// ── ClaudeCodeSender ────────────────────────────────────────────────────
+
+func init() {
+	RegisterOutboundSender(config.APITypeClaudeCode, func() OutboundSender { return &ClaudeCodeSender{} })
+}
+
+type ClaudeCodeSender struct{}
+
+func (s *ClaudeCodeSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
+	// Convert Responses format to Anthropic format for Claude Code
+	var bodyMap map[string]any
+	if err := json.Unmarshal(canonicalBody, &bodyMap); err != nil {
+		return 0, nil, nil, "", err
+	}
+
+	anthropicBody := convertResponsesToAnthropicRequest(bodyMap)
+	modifiedBody, err := json.Marshal(anthropicBody)
+	if err != nil {
+		return 0, nil, nil, "", err
+	}
+
+	// ForwardToClaudeCode returns Anthropic-format data
+	ctx := context.Background()
+	if originalReq != nil {
+		ctx = originalReq.Context()
+	}
+	status, respBody, respHeaders, err := ForwardToClaudeCodeWithContext(client, upstream, modifiedBody, ctx, stream)
+	if err != nil {
+		return status, nil, nil, "", err
+	}
+	return status, respBody, respHeaders, config.APITypeAnthropic, nil
+}
+
+func (s *ClaudeCodeSender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
+	// Convert Responses format to Anthropic format for Claude Code
+	var bodyMap map[string]any
+	if err := json.Unmarshal(canonicalBody, &bodyMap); err != nil {
+		return nil, "", err
+	}
+
+	anthropicBody := convertResponsesToAnthropicRequest(bodyMap)
+	modifiedBody, err := json.Marshal(anthropicBody)
+	if err != nil {
+		return nil, "", err
+	}
+
+	resp, err := ForwardToClaudeCodeStream(client, upstream, modifiedBody, originalReq.Context())
+	if err != nil {
+		return nil, "", err
+	}
+	return resp, config.APITypeAnthropic, nil
+}

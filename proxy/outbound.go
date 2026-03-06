@@ -2,8 +2,6 @@ package proxy
 
 import (
 	"bytes"
-	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,299 +25,28 @@ type StreamCapableSender interface {
 	SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (resp *http.Response, respFormat config.APIType, err error)
 }
 
+// OutboundSenderCreator is a factory function that creates a new OutboundSender.
+type OutboundSenderCreator func() OutboundSender
+
+// outboundSenderRegistry maps API types to their sender creators.
+var outboundSenderRegistry = map[config.APIType]OutboundSenderCreator{}
+
+// RegisterOutboundSender registers a sender creator for the given API type.
+// It is typically called from init() in each sender's file.
+func RegisterOutboundSender(apiType config.APIType, creator OutboundSenderCreator) {
+	outboundSenderRegistry[apiType] = creator
+}
+
 // GetOutboundSender returns the appropriate OutboundSender for the given API type.
 func GetOutboundSender(apiType config.APIType) OutboundSender {
-	switch apiType {
-	case config.APITypeAnthropic:
-		return &AnthropicSender{}
-	case config.APITypeOpenAI:
-		return &OpenAISender{}
-	case config.APITypeGemini:
-		return &GeminiSender{}
-	case config.APITypeResponses:
-		return &ResponsesSender{}
-	case config.APITypeCodex:
-		return &CodexSender{}
-	case config.APITypeGeminiCLI:
-		return &GeminiCLISender{}
-	case config.APITypeAntigravity:
-		return &AntigravitySender{}
-	case config.APITypeClaudeCode:
-		return &ClaudeCodeSender{}
-	case config.APITypeKiro:
-		return &KiroSender{}
-	default:
-		return &AnthropicSender{} // fallback
+	if creator, ok := outboundSenderRegistry[apiType]; ok {
+		return creator()
 	}
-}
-
-// ── AnthropicSender ─────────────────────────────────────────────────────
-
-type AnthropicSender struct{}
-
-func (s *AnthropicSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
-	// Convert Responses format to Anthropic format
-	var bodyMap map[string]any
-	if err := json.Unmarshal(canonicalBody, &bodyMap); err != nil {
-		return 0, nil, nil, "", err
+	// fallback: use Anthropic if no sender is registered
+	if creator, ok := outboundSenderRegistry[config.APITypeAnthropic]; ok {
+		return creator()
 	}
-
-	anthropicBody := convertResponsesToAnthropicRequest(bodyMap)
-	modifiedBody, err := json.Marshal(anthropicBody)
-	if err != nil {
-		return 0, nil, nil, "", err
-	}
-
-	url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
-
-	status, respBody, headers, err := doHTTPRequest(client, url, modifiedBody, upstream, config.APITypeAnthropic, originalReq, "")
-	if err != nil {
-		return 0, nil, nil, "", err
-	}
-	return status, respBody, headers, config.APITypeAnthropic, nil
-}
-
-// ── OpenAISender ──��─────────────────────────────────────────────────────
-
-type OpenAISender struct{}
-
-func (s *OpenAISender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
-	// Convert Responses format to OpenAI Chat format
-	var bodyMap map[string]any
-	if err := json.Unmarshal(canonicalBody, &bodyMap); err != nil {
-		return 0, nil, nil, "", err
-	}
-
-	chatBody := convertResponsesToChatRequest(bodyMap)
-	modifiedBody, err := json.Marshal(chatBody)
-	if err != nil {
-		return 0, nil, nil, "", err
-	}
-
-	url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
-
-	status, respBody, headers, err := doHTTPRequest(client, url, modifiedBody, upstream, config.APITypeOpenAI, originalReq, "")
-	if err != nil {
-		return 0, nil, nil, "", err
-	}
-	return status, respBody, headers, config.APITypeOpenAI, nil
-}
-
-// ── GeminiSender ────────────────────────────────────────────────────────
-
-type GeminiSender struct{}
-
-func (s *GeminiSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
-	// Convert Responses format to Gemini format
-	var bodyMap map[string]any
-	if err := json.Unmarshal(canonicalBody, &bodyMap); err != nil {
-		return 0, nil, nil, "", err
-	}
-
-	model, _ := bodyMap["model"].(string)
-
-	geminiBody := convertResponsesToGeminiRequest(bodyMap)
-	modifiedBody, err := json.Marshal(geminiBody)
-	if err != nil {
-		return 0, nil, nil, "", err
-	}
-
-	action := "generateContent"
-	if stream {
-		action = "streamGenerateContent"
-	}
-	url := fmt.Sprintf("%s/v1beta/models/%s:%s", strings.TrimSuffix(upstream.BaseURL, "/"), model, action)
-
-	status, respBody, headers, err := doHTTPRequest(client, url, modifiedBody, upstream, config.APITypeGemini, originalReq, "")
-	if err != nil {
-		return 0, nil, nil, "", err
-	}
-	return status, respBody, headers, config.APITypeGemini, nil
-}
-
-// ── ResponsesSender ─────────────────────────────────────────────────────
-
-type ResponsesSender struct{}
-
-func (s *ResponsesSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
-	// Native Responses format - no conversion needed.
-	// For translated inbound protocols we always target the canonical
-	// /v1/responses endpoint on the upstream; path-based variants such as
-	// /v1/responses/compact are only preserved by the inbound Responses handler.
-	url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/responses"
-
-	// Pass through query parameters for native format
-	rawQuery := ""
-	if originalReq.URL.RawQuery != "" {
-		rawQuery = originalReq.URL.RawQuery
-	}
-
-	status, respBody, headers, err := doHTTPRequest(client, url, canonicalBody, upstream, config.APITypeResponses, originalReq, rawQuery)
-	if err != nil {
-		return 0, nil, nil, "", err
-	}
-	return status, respBody, headers, config.APITypeResponses, nil
-}
-
-// ── CodexSender ─────────────────────────────────────────────────────────
-
-type CodexSender struct{}
-
-func (s *CodexSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
-	// Codex uses Responses format natively, delegate to ForwardToCodex
-	ctx := context.Background()
-	if originalReq != nil {
-		ctx = originalReq.Context()
-	}
-	status, respBody, respHeaders, err := ForwardToCodexWithContext(client, upstream, canonicalBody, ctx, stream)
-	if err != nil {
-		return status, nil, nil, "", err
-	}
-
-	return status, respBody, respHeaders, config.APITypeResponses, nil
-}
-
-func (s *CodexSender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
-	resp, err := ForwardToCodexStream(client, upstream, canonicalBody, originalReq.Context())
-	if err != nil {
-		return nil, "", err
-	}
-	return resp, config.APITypeResponses, nil
-}
-
-// ── GeminiCLISender ─────────────────────────────────────────────────────
-
-type GeminiCLISender struct{}
-
-func (s *GeminiCLISender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
-	// GeminiCLI uses Responses format natively, delegate to ForwardToGeminiCLI
-	ctx := context.Background()
-	if originalReq != nil {
-		ctx = originalReq.Context()
-	}
-	status, respBody, respHeaders, err := ForwardToGeminiCLIWithContext(client, upstream, canonicalBody, ctx, stream)
-	if err != nil {
-		return status, nil, nil, "", err
-	}
-
-	// Streaming returns native Gemini SSE; non-streaming returns Responses JSON
-	respFormat := config.APITypeResponses
-	if stream {
-		respFormat = config.APITypeGemini
-	}
-	return status, respBody, respHeaders, respFormat, nil
-}
-
-func (s *GeminiCLISender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
-	resp, err := ForwardToGeminiCLIStream(client, upstream, canonicalBody, originalReq.Context())
-	if err != nil {
-		return nil, "", err
-	}
-	return resp, config.APITypeGemini, nil
-}
-
-// ── AntigravitySender ───────────────────────────────────────────────────
-
-type AntigravitySender struct{}
-
-func (s *AntigravitySender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
-	// Antigravity uses Responses format natively, delegate to ForwardToAntigravity
-	ctx := context.Background()
-	if originalReq != nil {
-		ctx = originalReq.Context()
-	}
-	status, respBody, respHeaders, err := ForwardToAntigravityWithContext(client, upstream, canonicalBody, ctx, stream)
-	if err != nil {
-		return status, nil, nil, "", err
-	}
-
-	// Streaming returns native Gemini SSE; non-streaming returns Responses JSON
-	respFormat := config.APITypeResponses
-	if stream {
-		respFormat = config.APITypeGemini
-	}
-	return status, respBody, respHeaders, respFormat, nil
-}
-
-func (s *AntigravitySender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
-	resp, err := ForwardToAntigravityStream(client, upstream, canonicalBody, originalReq.Context())
-	if err != nil {
-		return nil, "", err
-	}
-	return resp, config.APITypeGemini, nil
-}
-
-// ── ClaudeCodeSender ────────────────────────────────────────────────────
-
-type ClaudeCodeSender struct{}
-
-func (s *ClaudeCodeSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
-	// Convert Responses format to Anthropic format for Claude Code
-	var bodyMap map[string]any
-	if err := json.Unmarshal(canonicalBody, &bodyMap); err != nil {
-		return 0, nil, nil, "", err
-	}
-
-	anthropicBody := convertResponsesToAnthropicRequest(bodyMap)
-	modifiedBody, err := json.Marshal(anthropicBody)
-	if err != nil {
-		return 0, nil, nil, "", err
-	}
-
-	// ForwardToClaudeCode returns Anthropic-format data
-	ctx := context.Background()
-	if originalReq != nil {
-		ctx = originalReq.Context()
-	}
-	status, respBody, respHeaders, err := ForwardToClaudeCodeWithContext(client, upstream, modifiedBody, ctx, stream)
-	if err != nil {
-		return status, nil, nil, "", err
-	}
-	return status, respBody, respHeaders, config.APITypeAnthropic, nil
-}
-
-func (s *ClaudeCodeSender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
-	// Convert Responses format to Anthropic format for Claude Code
-	var bodyMap map[string]any
-	if err := json.Unmarshal(canonicalBody, &bodyMap); err != nil {
-		return nil, "", err
-	}
-
-	anthropicBody := convertResponsesToAnthropicRequest(bodyMap)
-	modifiedBody, err := json.Marshal(anthropicBody)
-	if err != nil {
-		return nil, "", err
-	}
-
-	resp, err := ForwardToClaudeCodeStream(client, upstream, modifiedBody, originalReq.Context())
-	if err != nil {
-		return nil, "", err
-	}
-	return resp, config.APITypeAnthropic, nil
-}
-
-// ── KiroSender ────────────────────────────────────────────────────────
-
-type KiroSender struct{}
-
-func (s *KiroSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
-	ctx := context.Background()
-	if originalReq != nil {
-		ctx = originalReq.Context()
-	}
-	status, respBody, respHeaders, err := ForwardToKiroWithContext(client, upstream, canonicalBody, ctx, stream)
-	if err != nil {
-		return status, nil, nil, "", err
-	}
-	return status, respBody, respHeaders, config.APITypeAnthropic, nil
-}
-
-func (s *KiroSender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
-	resp, err := ForwardToKiroStream(client, upstream, canonicalBody, originalReq.Context())
-	if err != nil {
-		return nil, "", err
-	}
-	return resp, config.APITypeAnthropic, nil
+	return nil
 }
 
 // ── Shared HTTP helper ─────────────────────────���────────────────────────

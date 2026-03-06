@@ -342,6 +342,9 @@ func (h *OpenAIHandler) forwardRequest(upstream config.Upstream, model string, o
 
 	// Send via OutboundSender
 	sender := GetOutboundSender(apiType)
+	if sender == nil {
+		return 0, nil, nil, nil, fmt.Errorf("unsupported outbound API type: %s", apiType)
+	}
 	status, respBody, respHeaders, respFormat, err := sender.Send(h.client, upstream, canonicalBytes, clientWantsStream, originalReq)
 	if err != nil {
 		return status, nil, nil, nil, err
@@ -894,4 +897,34 @@ func mapAnthropicStopReason(reason string) string {
 	default:
 		return "stop"
 	}
+}
+
+// ── OpenAISender ────────────────────────────────────────────────────────
+
+func init() {
+	RegisterOutboundSender(config.APITypeOpenAI, func() OutboundSender { return &OpenAISender{} })
+}
+
+type OpenAISender struct{}
+
+func (s *OpenAISender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
+	// Convert Responses format to OpenAI Chat format
+	var bodyMap map[string]any
+	if err := json.Unmarshal(canonicalBody, &bodyMap); err != nil {
+		return 0, nil, nil, "", err
+	}
+
+	chatBody := convertResponsesToChatRequest(bodyMap)
+	modifiedBody, err := json.Marshal(chatBody)
+	if err != nil {
+		return 0, nil, nil, "", err
+	}
+
+	url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/chat/completions"
+
+	status, respBody, headers, err := doHTTPRequest(client, url, modifiedBody, upstream, config.APITypeOpenAI, originalReq, "")
+	if err != nil {
+		return 0, nil, nil, "", err
+	}
+	return status, respBody, headers, config.APITypeOpenAI, nil
 }

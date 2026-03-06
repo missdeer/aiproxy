@@ -811,6 +811,37 @@ func TestStreamingFastPath_NonTargetRemainBuffered(t *testing.T) {
 	}
 }
 
+func TestGetOutboundSender_RegistryCoverage(t *testing.T) {
+	testCases := []struct {
+		apiType       config.APIType
+		streamCapable bool
+	}{
+		{apiType: config.APITypeAnthropic, streamCapable: false},
+		{apiType: config.APITypeOpenAI, streamCapable: false},
+		{apiType: config.APITypeGemini, streamCapable: false},
+		{apiType: config.APITypeResponses, streamCapable: false},
+		{apiType: config.APITypeCodex, streamCapable: true},
+		{apiType: config.APITypeGeminiCLI, streamCapable: true},
+		{apiType: config.APITypeAntigravity, streamCapable: true},
+		{apiType: config.APITypeClaudeCode, streamCapable: true},
+		{apiType: config.APITypeKiro, streamCapable: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(string(tc.apiType), func(t *testing.T) {
+			sender := GetOutboundSender(tc.apiType)
+			if sender == nil {
+				t.Fatalf("sender for %s is nil; registration missing", tc.apiType)
+			}
+
+			_, isStreamCapable := sender.(StreamCapableSender)
+			if isStreamCapable != tc.streamCapable {
+				t.Fatalf("sender for %s stream capability = %v, want %v", tc.apiType, isStreamCapable, tc.streamCapable)
+			}
+		})
+	}
+}
+
 // ── Test helpers ──────────────────────────────────────────────────────
 
 // syncResponseWriter is a thread-safe http.ResponseWriter used in tests that

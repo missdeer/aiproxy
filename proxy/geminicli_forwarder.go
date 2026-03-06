@@ -507,3 +507,38 @@ func geminiCLICopyTokenMap(m map[string]any) map[string]any {
 	}
 	return copy
 }
+
+// ── GeminiCLISender ─────────────────────────────────────────────────────
+
+func init() {
+	RegisterOutboundSender(config.APITypeGeminiCLI, func() OutboundSender { return &GeminiCLISender{} })
+}
+
+type GeminiCLISender struct{}
+
+func (s *GeminiCLISender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
+	// GeminiCLI uses Responses format natively, delegate to ForwardToGeminiCLI
+	ctx := context.Background()
+	if originalReq != nil {
+		ctx = originalReq.Context()
+	}
+	status, respBody, respHeaders, err := ForwardToGeminiCLIWithContext(client, upstream, canonicalBody, ctx, stream)
+	if err != nil {
+		return status, nil, nil, "", err
+	}
+
+	// Streaming returns native Gemini SSE; non-streaming returns Responses JSON
+	respFormat := config.APITypeResponses
+	if stream {
+		respFormat = config.APITypeGemini
+	}
+	return status, respBody, respHeaders, respFormat, nil
+}
+
+func (s *GeminiCLISender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
+	resp, err := ForwardToGeminiCLIStream(client, upstream, canonicalBody, originalReq.Context())
+	if err != nil {
+		return nil, "", err
+	}
+	return resp, config.APITypeGemini, nil
+}

@@ -345,7 +345,9 @@ func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string
 
 	// Send via OutboundSender
 	sender := GetOutboundSender(apiType)
-
+	if sender == nil {
+		return 0, nil, nil, nil, fmt.Errorf("unsupported outbound API type: %s", apiType)
+	}
 	// Streaming fast path: if sender supports SendStream and client wants streaming,
 	// try to get the raw response for PipeStream passthrough.
 	if clientWantsStream {
@@ -448,4 +450,34 @@ func stripHopByHopHeaders(h http.Header) {
 	} {
 		h.Del(header)
 	}
+}
+
+// ── AnthropicSender ─────────────────────────────────────────────────────
+
+func init() {
+	RegisterOutboundSender(config.APITypeAnthropic, func() OutboundSender { return &AnthropicSender{} })
+}
+
+type AnthropicSender struct{}
+
+func (s *AnthropicSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
+	// Convert Responses format to Anthropic format
+	var bodyMap map[string]any
+	if err := json.Unmarshal(canonicalBody, &bodyMap); err != nil {
+		return 0, nil, nil, "", err
+	}
+
+	anthropicBody := convertResponsesToAnthropicRequest(bodyMap)
+	modifiedBody, err := json.Marshal(anthropicBody)
+	if err != nil {
+		return 0, nil, nil, "", err
+	}
+
+	url := strings.TrimSuffix(upstream.BaseURL, "/") + "/v1/messages"
+
+	status, respBody, headers, err := doHTTPRequest(client, url, modifiedBody, upstream, config.APITypeAnthropic, originalReq, "")
+	if err != nil {
+		return 0, nil, nil, "", err
+	}
+	return status, respBody, headers, config.APITypeAnthropic, nil
 }
