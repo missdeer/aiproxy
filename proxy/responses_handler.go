@@ -211,7 +211,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							w.Header().Add(k, v)
 						}
 					}
-					stripHopByHopHeaders(w.Header())
+					StripHopByHopHeaders(w.Header())
 					w.WriteHeader(status)
 					streamStart := time.Now()
 					log.Printf("[RESPONSES] stream_start upstream=%s status=%d (headers sent to client)", upstream.Name, status)
@@ -338,7 +338,7 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 				defer resp.Body.Close()
 				errBody, _ := io.ReadAll(resp.Body)
 				headers := resp.Header.Clone()
-				stripHopByHopHeaders(headers)
+				StripHopByHopHeaders(headers)
 				return resp.StatusCode, errBody, headers, nil, nil
 			}
 			return resp.StatusCode, nil, nil, resp, nil

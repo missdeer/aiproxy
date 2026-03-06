@@ -62,7 +62,7 @@ func HandleStreamResponse(resp *http.Response) (status int, errBody []byte, head
 			return 0, nil, nil, nil, fmt.Errorf("failed to read upstream error response body: %w", readErr)
 		}
 		h := resp.Header.Clone()
-		stripHopByHopHeaders(h)
+		StripHopByHopHeaders(h)
 		return resp.StatusCode, body, h, nil, nil
 	}
 	return resp.StatusCode, nil, nil, resp, nil
@@ -87,7 +87,7 @@ func doHTTPRequest(client *http.Client, url string, body []byte, upstream config
 		}
 	}
 
-	stripHopByHopHeaders(req.Header)
+	StripHopByHopHeaders(req.Header)
 
 	// Set authentication based on API type
 	switch apiType {
@@ -129,7 +129,7 @@ func doHTTPRequest(client *http.Client, url string, body []byte, upstream config
 	}
 
 	headers := resp.Header.Clone()
-	stripHopByHopHeaders(headers)
+	StripHopByHopHeaders(headers)
 
 	return resp.StatusCode, respBody, headers, nil
 }
@@ -155,7 +155,7 @@ func doHTTPRequestStream(client *http.Client, url string, body []byte, upstream 
 		}
 	}
 
-	stripHopByHopHeaders(req.Header)
+	StripHopByHopHeaders(req.Header)
 
 	// Set authentication based on API type
 	switch apiType {

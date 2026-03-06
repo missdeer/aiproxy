@@ -191,7 +191,7 @@ func (h *OpenAIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							w.Header().Add(k, v)
 						}
 					}
-					stripHopByHopHeaders(w.Header())
+					StripHopByHopHeaders(w.Header())
 					w.WriteHeader(status)
 
 					result := PipeStream(w, streamResp.Body)
@@ -315,7 +315,7 @@ func (h *OpenAIHandler) forwardRequest(upstream config.Upstream, model string, o
 				defer resp.Body.Close()
 				errBody, _ := io.ReadAll(resp.Body)
 				headers := resp.Header.Clone()
-				stripHopByHopHeaders(headers)
+				StripHopByHopHeaders(headers)
 				return resp.StatusCode, errBody, headers, nil, nil
 			}
 			return resp.StatusCode, nil, nil, resp, nil

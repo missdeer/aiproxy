@@ -108,7 +108,7 @@ func TestTruncateString(t *testing.T) {
 	}
 }
 
-// ── stripHopByHopHeaders tests ─────────────────────────────────────────
+// ── StripHopByHopHeaders tests ─────────────────────────────────────────
 
 func TestStripHopByHopHeaders(t *testing.T) {
 	t.Run("removes standard hop-by-hop headers", func(t *testing.T) {
@@ -119,7 +119,7 @@ func TestStripHopByHopHeaders(t *testing.T) {
 		h.Set("Content-Type", "application/json")
 		h.Set("X-Custom", "value")
 
-		stripHopByHopHeaders(h)
+		StripHopByHopHeaders(h)
 
 		if h.Get("Connection") != "" {
 			t.Fatal("Connection header should be removed")
@@ -146,7 +146,7 @@ func TestStripHopByHopHeaders(t *testing.T) {
 		h.Set("X-Bar", "bar-val")
 		h.Set("X-Keep", "keep-val")
 
-		stripHopByHopHeaders(h)
+		StripHopByHopHeaders(h)
 
 		if h.Get("X-Foo") != "" {
 			t.Fatal("X-Foo should be removed (listed in Connection)")
