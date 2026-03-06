@@ -63,12 +63,13 @@ func main() {
 		defer cfgManager.StopWatching()
 	}
 
-	http.Handle("/v1/messages", middleware.DecompressionMiddleware(anthropicHandler))
-	http.Handle("/v1/chat/completions", middleware.DecompressionMiddleware(openaiHandler))
-	http.Handle("/v1/responses", middleware.DecompressionMiddleware(responsesHandler))
-	http.Handle("/v1/responses/", middleware.DecompressionMiddleware(responsesHandler))
-	http.Handle("/v1beta/models/", middleware.DecompressionMiddleware(geminiHandler))
-	http.Handle("/v1/models/", middleware.DecompressionMiddleware(geminiHandler))
+	mux := http.NewServeMux()
+	mux.Handle("POST /v1/messages", middleware.DecompressionMiddleware(anthropicHandler))
+	mux.Handle("POST /v1/chat/completions", middleware.DecompressionMiddleware(openaiHandler))
+	mux.Handle("POST /v1/responses", middleware.DecompressionMiddleware(responsesHandler))
+	mux.Handle("POST /v1/responses/compact", middleware.DecompressionMiddleware(responsesHandler))
+	mux.Handle("POST /v1beta/models/{rest...}", middleware.DecompressionMiddleware(geminiHandler))
+	mux.Handle("POST /v1/models/{rest...}", middleware.DecompressionMiddleware(geminiHandler))
 
 	// Handle graceful shutdown
 	go func() {
@@ -82,7 +83,7 @@ func main() {
 
 	addr := cfg.Bind + cfg.Listen
 	log.Printf("Starting proxy server on %s", addr)
-	if err := http.ListenAndServe(addr, nil); err != nil {
+	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
