@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/missdeer/aiproxy/config"
 	"github.com/missdeer/aiproxy/middleware"
@@ -71,19 +73,31 @@ func main() {
 	mux.Handle("POST /v1beta/models/{rest...}", middleware.DecompressionMiddleware(geminiHandler))
 	mux.Handle("POST /v1/models/{rest...}", middleware.DecompressionMiddleware(geminiHandler))
 
-	// Handle graceful shutdown
+	addr := cfg.Bind + cfg.Listen
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
+	// Graceful shutdown: wait for in-flight requests to complete
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		log.Println("Shutting down...")
-		cfgManager.StopWatching()
-		os.Exit(0)
+		sig := <-sigCh
+		log.Printf("Received %v, shutting down gracefully...", sig)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		srv.SetKeepAlivesEnabled(false)
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("Graceful shutdown timed out, forcing: %v", err)
+		}
 	}()
 
-	addr := cfg.Bind + cfg.Listen
 	log.Printf("Starting proxy server on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("Server failed: %v", err)
 	}
+	log.Println("Server stopped")
 }
