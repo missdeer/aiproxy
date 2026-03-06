@@ -8,7 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/missdeer/aiproxy/balancer"
@@ -16,26 +16,24 @@ import (
 )
 
 type AnthropicHandler struct {
-	cfg      *config.Config
+	cfg      atomic.Pointer[config.Config]
 	balancer *balancer.WeightedRoundRobin
 	client   *http.Client
-	mu       sync.RWMutex
 }
 
 func NewAnthropicHandler(cfg *config.Config) *AnthropicHandler {
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
-	return &AnthropicHandler{
-		cfg:      cfg,
+	h := &AnthropicHandler{
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
 		client:   newHTTPClient(timeout),
 	}
+	h.cfg.Store(cfg)
+	return h
 }
 
-// UpdateConfig updates the handler's configuration
+// UpdateConfig atomically swaps the configuration snapshot and updates the balancer.
 func (h *AnthropicHandler) UpdateConfig(cfg *config.Config) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.cfg = cfg
+	h.cfg.Store(cfg)
 	h.balancer.Update(cfg.Upstreams)
 }
 
@@ -212,9 +210,7 @@ func (h *AnthropicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Check for model fallback
-		h.mu.RLock()
-		fallback := h.cfg.GetModelFallback(currentModel)
-		h.mu.RUnlock()
+		fallback := h.cfg.Load().GetModelFallback(currentModel)
 		if fallback == "" || visited[fallback] {
 			break
 		}

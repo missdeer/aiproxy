@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/missdeer/aiproxy/balancer"
@@ -16,22 +16,23 @@ import (
 	"github.com/missdeer/aiproxy/middleware"
 )
 
-// BaseHandler contains shared fields and utilities for all handlers
+// BaseHandler contains shared fields and utilities for all handlers.
+// Config snapshots are stored via atomic.Pointer and must be treated as read-only.
 type BaseHandler struct {
-	Cfg      *config.Config
+	cfg      atomic.Pointer[config.Config]
 	Balancer *balancer.WeightedRoundRobin
 	Client   *http.Client
-	mu       sync.RWMutex
 }
 
 // NewBaseHandler creates a new BaseHandler with shared components
-func NewBaseHandler(cfg *config.Config) BaseHandler {
+func NewBaseHandler(cfg *config.Config) *BaseHandler {
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
-	return BaseHandler{
-		Cfg:      cfg,
+	b := &BaseHandler{
 		Balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
 		Client:   newHTTPClient(timeout),
 	}
+	b.cfg.Store(cfg)
+	return b
 }
 
 // newHTTPClient creates an http.Client that clones http.DefaultTransport and
@@ -95,19 +96,16 @@ func ApplyBodyCompression(req *http.Request, body []byte, upstream config.Upstre
 	return finalBody, nil
 }
 
-// UpdateConfig updates the handler's configuration
+// UpdateConfig atomically swaps the configuration snapshot and updates the balancer.
 func (b *BaseHandler) UpdateConfig(cfg *config.Config) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.Cfg = cfg
+	b.cfg.Store(cfg)
 	b.Balancer.Update(cfg.Upstreams)
 }
 
-// GetConfig returns the current configuration (thread-safe)
+// GetConfig returns the current configuration snapshot (lock-free).
+// The returned *Config must be treated as read-only.
 func (b *BaseHandler) GetConfig() *config.Config {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.Cfg
+	return b.cfg.Load()
 }
 
 // FilterAndOrderUpstreams returns upstreams that support the given model,

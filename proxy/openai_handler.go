@@ -9,7 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/missdeer/aiproxy/balancer"
@@ -18,27 +18,25 @@ import (
 
 // OpenAIHandler handles OpenAI-compatible API requests
 type OpenAIHandler struct {
-	cfg      *config.Config
+	cfg      atomic.Pointer[config.Config]
 	balancer *balancer.WeightedRoundRobin
 	client   *http.Client
-	mu       sync.RWMutex
 }
 
 // NewOpenAIHandler creates a new OpenAI-compatible handler
 func NewOpenAIHandler(cfg *config.Config) *OpenAIHandler {
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
-	return &OpenAIHandler{
-		cfg:      cfg,
+	h := &OpenAIHandler{
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
 		client:   newHTTPClient(timeout),
 	}
+	h.cfg.Store(cfg)
+	return h
 }
 
-// UpdateConfig updates the handler's configuration
+// UpdateConfig atomically swaps the configuration snapshot and updates the balancer.
 func (h *OpenAIHandler) UpdateConfig(cfg *config.Config) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.cfg = cfg
+	h.cfg.Store(cfg)
 	h.balancer.Update(cfg.Upstreams)
 }
 
@@ -253,9 +251,7 @@ func (h *OpenAIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Check for model fallback
-		h.mu.RLock()
-		fallback := h.cfg.GetModelFallback(currentModel)
-		h.mu.RUnlock()
+		fallback := h.cfg.Load().GetModelFallback(currentModel)
 		if fallback == "" || visited[fallback] {
 			break
 		}

@@ -9,7 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/missdeer/aiproxy/balancer"
@@ -18,34 +18,30 @@ import (
 
 // GeminiHandler handles Gemini API requests
 type GeminiHandler struct {
-	cfg      *config.Config
+	cfg      atomic.Pointer[config.Config]
 	balancer *balancer.WeightedRoundRobin
 	client   *http.Client
-	mu       sync.RWMutex
 }
 
 // NewGeminiHandler creates a new Gemini API handler
 func NewGeminiHandler(cfg *config.Config) *GeminiHandler {
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
-	return &GeminiHandler{
-		cfg:      cfg,
+	h := &GeminiHandler{
 		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
 		client:   newHTTPClient(timeout),
 	}
+	h.cfg.Store(cfg)
+	return h
 }
 
-// UpdateConfig updates the handler's configuration
+// UpdateConfig atomically swaps the configuration snapshot and updates the balancer.
 func (h *GeminiHandler) UpdateConfig(cfg *config.Config) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.cfg = cfg
+	h.cfg.Store(cfg)
 	h.balancer.Update(cfg.Upstreams)
 }
 
 func (h *GeminiHandler) defaultMaxTokens() int {
-	h.mu.RLock()
-	cfg := h.cfg
-	h.mu.RUnlock()
+	cfg := h.cfg.Load()
 	if cfg == nil || cfg.DefaultMaxTokens <= 0 {
 		return 4096
 	}
@@ -277,9 +273,7 @@ func (h *GeminiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Check for model fallback
-		h.mu.RLock()
-		fallback := h.cfg.GetModelFallback(currentModel)
-		h.mu.RUnlock()
+		fallback := h.cfg.Load().GetModelFallback(currentModel)
 		if fallback == "" || visited[fallback] {
 			break
 		}

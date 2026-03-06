@@ -4,20 +4,23 @@ import (
 	"log"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
-// Manager manages configuration with hot-reload support
+// Manager manages configuration with hot-reload support.
+// Config snapshots are immutable once published; Get returns a shared
+// pointer that callers must NOT mutate.
 type Manager struct {
-	path      string
-	config    *Config
-	mu        sync.RWMutex
-	listeners []func(*Config)
-	watchMu   sync.Mutex
-	watcher   *fsnotify.Watcher
-	done      chan struct{}
+	path        string
+	config      atomic.Pointer[Config]
+	listenersMu sync.RWMutex
+	listeners   []func(*Config)
+	watchMu     sync.Mutex
+	watcher     *fsnotify.Watcher
+	done        chan struct{}
 }
 
 // NewManager creates a new configuration manager
@@ -28,24 +31,23 @@ func NewManager(path string) (*Manager, error) {
 	}
 
 	m := &Manager{
-		path:   path,
-		config: cfg,
+		path: path,
 	}
+	m.config.Store(cfg)
 
 	return m, nil
 }
 
-// Get returns the current configuration (thread-safe)
+// Get returns the current configuration snapshot (thread-safe, lock-free).
+// The returned *Config must be treated as read-only.
 func (m *Manager) Get() *Config {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.config
+	return m.config.Load()
 }
 
 // OnReload registers a callback that will be called when config is reloaded
 func (m *Manager) OnReload(fn func(*Config)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.listenersMu.Lock()
+	defer m.listenersMu.Unlock()
 	m.listeners = append(m.listeners, fn)
 }
 
@@ -176,12 +178,12 @@ func (m *Manager) reload() {
 		return
 	}
 
-	m.mu.Lock()
-	oldCfg := m.config
-	m.config = newCfg
+	oldCfg := m.config.Swap(newCfg)
+
+	m.listenersMu.RLock()
 	listeners := make([]func(*Config), len(m.listeners))
 	copy(listeners, m.listeners)
-	m.mu.Unlock()
+	m.listenersMu.RUnlock()
 
 	// Log changes
 	log.Printf("[CONFIG] Reloaded successfully: %d upstreams (was %d)",
