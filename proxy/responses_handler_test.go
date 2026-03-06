@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -85,6 +87,81 @@ func TestResponsesHandler_NoSupportedModel_NoFallback_ReturnsModelNotFound(t *te
 	}
 	if !strings.Contains(rec.Body.String(), "model_not_found") {
 		t.Fatalf("body = %q, want model_not_found", rec.Body.String())
+	}
+}
+
+func TestResponsesHandler_ForwardRequest_NativeResponsesCompactPreservesPathAndQuery(t *testing.T) {
+	cfg := &config.Config{UpstreamRequestTimeout: 1}
+	handler := NewResponsesHandler(cfg)
+
+	var gotURL string
+	var gotBody map[string]any
+
+	handler.client = &http.Client{
+		Transport: &mockRoundTripper{
+			handler: func(req *http.Request) (*http.Response, error) {
+				gotURL = req.URL.String()
+
+				bodyBytes, err := io.ReadAll(req.Body)
+				if err != nil {
+					t.Fatalf("ReadAll(req.Body) error = %v", err)
+				}
+				if err := json.Unmarshal(bodyBytes, &gotBody); err != nil {
+					t.Fatalf("json.Unmarshal(body) error = %v", err)
+				}
+
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_123"}`)),
+					Header:     http.Header{"Content-Type": {"application/json"}},
+				}, nil
+			},
+		},
+	}
+
+	upstream := config.Upstream{
+		Name:    "test-upstream",
+		BaseURL: "https://api.example.com/",
+		Token:   "sk-test",
+		APIType: config.APITypeResponses,
+	}
+
+	originalReq := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses/compact?include=usage&reasoning=summary",
+		nil,
+	)
+	originalReq.Header.Set("Content-Type", "application/json")
+
+	originalBody := []byte(`{"model":"original-model","input":"hello"}`)
+
+	status, respBody, respHeaders, streamResp, err := handler.forwardRequest(
+		upstream,
+		"mapped-model",
+		originalBody,
+		false,
+		originalReq,
+	)
+	if err != nil {
+		t.Fatalf("forwardRequest() error = %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if streamResp != nil {
+		t.Fatal("streamResp != nil, want nil for non-streaming request")
+	}
+	if gotURL != "https://api.example.com/v1/responses/compact?include=usage&reasoning=summary" {
+		t.Fatalf("upstream URL = %q", gotURL)
+	}
+	if gotBody["model"] != "mapped-model" {
+		t.Fatalf("forwarded model = %v, want mapped-model", gotBody["model"])
+	}
+	if string(respBody) != `{"id":"resp_123"}` {
+		t.Fatalf("response body = %q", string(respBody))
+	}
+	if respHeaders.Get("Content-Type") != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", respHeaders.Get("Content-Type"))
 	}
 }
 
