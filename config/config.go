@@ -195,11 +195,22 @@ func Load(path string) (*Config, error) {
 	}
 
 	for i := range cfg.Upstreams {
+		cfg.Upstreams[i].Name = strings.TrimSpace(cfg.Upstreams[i].Name)
 		if cfg.Upstreams[i].Weight <= 0 {
 			cfg.Upstreams[i].Weight = 1
 		}
 		if cfg.Upstreams[i].RequestCompression == "" {
 			cfg.Upstreams[i].RequestCompression = "zstd"
+		}
+		// Strip empty/whitespace-only auth_files entries.
+		if len(cfg.Upstreams[i].AuthFiles) > 0 {
+			filtered := cfg.Upstreams[i].AuthFiles[:0]
+			for _, f := range cfg.Upstreams[i].AuthFiles {
+				if strings.TrimSpace(f) != "" {
+					filtered = append(filtered, f)
+				}
+			}
+			cfg.Upstreams[i].AuthFiles = filtered
 		}
 		// Deduplicate AuthFiles using normalized absolute paths.
 		// Relative paths are resolved against the process CWD (not the config file location).
@@ -272,21 +283,21 @@ var oauthAPITypes = map[APIType]struct{}{
 }
 
 func validateUpstreams(upstreams []Upstream) error {
-	names := make(map[string]int) // name -> 1-based index of first occurrence
+	names := make(map[string]int) // normalized name -> 1-based index of first occurrence
 	for i := range upstreams {
 		u := &upstreams[i]
 		idx := i + 1 // 1-based for human-readable messages
 
-		// Every upstream must have a name
-		if strings.TrimSpace(u.Name) == "" {
+		if u.Name == "" {
 			return fmt.Errorf("upstream #%d: missing required field \"name\"", idx)
 		}
 
-		// Duplicate name check
-		if prev, ok := names[u.Name]; ok {
+		// Case-insensitive duplicate check (names are already trimmed in Load)
+		key := strings.ToLower(u.Name)
+		if prev, ok := names[key]; ok {
 			return fmt.Errorf("upstream #%d %q: duplicate name (first defined at #%d)", idx, u.Name, prev)
 		}
-		names[u.Name] = idx
+		names[key] = idx
 
 		// Skip further validation for disabled upstreams
 		if !u.IsEnabled() {

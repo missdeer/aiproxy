@@ -464,6 +464,33 @@ upstreams:
 		}
 	})
 
+	t.Run("duplicate name case-insensitive", func(t *testing.T) {
+		_, err := loadYAML(t, `
+upstreams:
+  - name: "MyUpstream"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+  - name: "myupstream"
+    base_url: "https://api2.example.com"
+    token: "sk-test2"
+`)
+		if err == nil || !strings.Contains(err.Error(), "duplicate name") {
+			t.Fatalf("expected case-insensitive duplicate name error, got %v", err)
+		}
+	})
+
+	t.Run("whitespace-only name rejected", func(t *testing.T) {
+		_, err := loadYAML(t, `
+upstreams:
+  - name: "   "
+    base_url: "https://api.example.com"
+    token: "sk-test"
+`)
+		if err == nil || !strings.Contains(err.Error(), "missing required field \"name\"") {
+			t.Fatalf("expected missing name error for whitespace-only name, got %v", err)
+		}
+	})
+
 	t.Run("unknown api_type", func(t *testing.T) {
 		_, err := loadYAML(t, `
 upstreams:
@@ -523,6 +550,54 @@ upstreams:
 			}
 		})
 	}
+
+	t.Run("oauth with empty-string auth_files rejected", func(t *testing.T) {
+		_, err := loadYAML(t, `
+upstreams:
+  - name: "codex-empty-entry"
+    api_type: "codex"
+    auth_files:
+      - ""
+`)
+		if err == nil || !strings.Contains(err.Error(), "requires at least one auth_files entry") {
+			t.Fatalf("expected auth_files error for empty-string entry, got %v", err)
+		}
+	})
+
+	t.Run("oauth with whitespace-only auth_files rejected", func(t *testing.T) {
+		_, err := loadYAML(t, `
+upstreams:
+  - name: "codex-ws-entry"
+    api_type: "codex"
+    auth_files:
+      - "   "
+      - ""
+`)
+		if err == nil || !strings.Contains(err.Error(), "requires at least one auth_files entry") {
+			t.Fatalf("expected auth_files error for whitespace-only entries, got %v", err)
+		}
+	})
+
+	t.Run("auth_files filters blanks keeps valid", func(t *testing.T) {
+		cfg, err := loadYAML(t, `
+upstreams:
+  - name: "codex-mixed"
+    api_type: "codex"
+    auth_files:
+      - ""
+      - "/valid/auth.json"
+      - "   "
+`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := len(cfg.Upstreams[0].AuthFiles); got != 1 {
+			t.Fatalf("AuthFiles count = %d, want 1", got)
+		}
+		if cfg.Upstreams[0].AuthFiles[0] != "/valid/auth.json" {
+			t.Errorf("AuthFiles[0] = %q, want %q", cfg.Upstreams[0].AuthFiles[0], "/valid/auth.json")
+		}
+	})
 
 	t.Run("oauth with auth_files passes", func(t *testing.T) {
 		cfg, err := loadYAML(t, `
