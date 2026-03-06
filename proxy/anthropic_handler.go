@@ -66,7 +66,7 @@ func (h *AnthropicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract prompt preview for logging
-	promptPreview := extractPromptPreview(req.Messages)
+	promptPreview := extractAnthropicPromptPreview(req.Messages)
 	log.Printf("[ANTHROPIC REQUEST] Model: %s, Stream: %v, Prompt: %s", req.Model, req.Stream, promptPreview)
 
 	originalModel := req.Model
@@ -243,8 +243,8 @@ func (h *AnthropicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, fmt.Sprintf("All upstreams failed: %v", lastErr), lastStatus)
 }
 
-// extractPromptPreview extracts a preview of the prompt from messages
-func extractPromptPreview(messages []any) string {
+// extractAnthropicPromptPreview extracts a preview of the prompt from messages
+func extractAnthropicPromptPreview(messages []any) string {
 	if len(messages) == 0 {
 		return "(empty)"
 	}

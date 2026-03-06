@@ -9,9 +9,9 @@ import (
 	"github.com/missdeer/aiproxy/config"
 )
 
-// ── extractPromptPreview tests ─────────────────────────────────────────
+// ── extractAnthropicPromptPreview tests ─────────────────────────────────────────
 
-func TestExtractPromptPreview(t *testing.T) {
+func TestExtractAnthropicPromptPreview(t *testing.T) {
 	tests := []struct {
 		name     string
 		messages []any
@@ -75,9 +75,9 @@ func TestExtractPromptPreview(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractPromptPreview(tt.messages)
+			got := extractAnthropicPromptPreview(tt.messages)
 			if got != tt.want {
-				t.Fatalf("extractPromptPreview() = %q, want %q", got, tt.want)
+				t.Fatalf("extractAnthropicPromptPreview() = %q, want %q", got, tt.want)
 			}
 		})
 	}
