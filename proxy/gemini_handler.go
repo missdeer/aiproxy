@@ -238,7 +238,7 @@ func (h *GeminiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 
 				if status >= 400 {
-					log.Printf("[ERROR] Upstream %s returned HTTP %d, response: %s", upstream.Name, status, truncateString(string(respBody), 200))
+					log.Printf("[ERROR] Upstream %s returned HTTP %d, response: %s", upstream.Name, status, TruncateString(string(respBody), 200))
 					if h.balancer.RecordFailure(upstream.Name, currentModel) {
 						log.Printf("[CIRCUIT] Upstream %s model %s marked as unavailable after %d consecutive failures", upstream.Name, currentModel, 3)
 					}
@@ -474,7 +474,7 @@ func extractGeminiPromptPreview(contents []GeminiContent) string {
 		if contents[i].Role == "user" || contents[i].Role == "" {
 			for _, part := range contents[i].Parts {
 				if part.Text != "" {
-					return truncateString(part.Text, 100)
+					return TruncateString(part.Text, 100)
 				}
 			}
 		}

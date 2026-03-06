@@ -213,7 +213,7 @@ func (h *OpenAIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 
 				if status >= 400 {
-					log.Printf("[ERROR] Upstream %s returned HTTP %d, response: %s", upstream.Name, status, truncateString(string(respBody), 200))
+					log.Printf("[ERROR] Upstream %s returned HTTP %d, response: %s", upstream.Name, status, TruncateString(string(respBody), 200))
 					if h.balancer.RecordFailure(upstream.Name, currentModel) {
 						log.Printf("[CIRCUIT] Upstream %s model %s marked as unavailable after %d consecutive failures", upstream.Name, currentModel, 3)
 					}
@@ -806,12 +806,12 @@ func extractOpenAIPromptPreview(messages []OpenAIMessage) string {
 	lastMsg := messages[len(messages)-1]
 	switch c := lastMsg.Content.(type) {
 	case string:
-		return truncateString(c, 100)
+		return TruncateString(c, 100)
 	case []any:
 		for _, part := range c {
 			if partMap, ok := part.(map[string]any); ok {
 				if text, ok := partMap["text"].(string); ok {
-					return truncateString(text, 100)
+					return TruncateString(text, 100)
 				}
 			}
 		}

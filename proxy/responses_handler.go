@@ -235,7 +235,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 
 				if status >= 400 {
-					log.Printf("[ERROR] Upstream %s returned HTTP %d, response: %s", upstream.Name, status, truncateString(string(respBody), 200))
+					log.Printf("[ERROR] Upstream %s returned HTTP %d, response: %s", upstream.Name, status, TruncateString(string(respBody), 200))
 					if h.balancer.RecordFailure(upstream.Name, currentModel) {
 						log.Printf("[CIRCUIT] Upstream %s model %s marked as unavailable after %d consecutive failures", upstream.Name, currentModel, 3)
 					}
@@ -465,20 +465,20 @@ func (h *ResponsesHandler) writeResponsesError(w http.ResponseWriter, status int
 func extractResponsesPromptPreview(input any) string {
 	switch v := input.(type) {
 	case string:
-		return truncateString(v, 100)
+		return TruncateString(v, 100)
 	case []any:
 		// Look for user message content
 		for _, item := range v {
 			if itemMap, ok := item.(map[string]any); ok {
 				if role, _ := itemMap["role"].(string); role == "user" {
 					if content, ok := itemMap["content"].(string); ok {
-						return truncateString(content, 100)
+						return TruncateString(content, 100)
 					}
 					if contentArr, ok := itemMap["content"].([]any); ok {
 						for _, c := range contentArr {
 							if cMap, ok := c.(map[string]any); ok {
 								if text, ok := cMap["text"].(string); ok {
-									return truncateString(text, 100)
+									return TruncateString(text, 100)
 								}
 							}
 						}

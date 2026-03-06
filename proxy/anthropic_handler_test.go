@@ -83,7 +83,7 @@ func TestExtractPromptPreview(t *testing.T) {
 	}
 }
 
-// ── truncateString tests ───────────────────────────────────────────────
+// ── TruncateString tests ───────────────────────────────────────────────
 
 func TestTruncateString(t *testing.T) {
 	tests := []struct {
@@ -100,9 +100,9 @@ func TestTruncateString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := truncateString(tt.s, tt.maxLen)
+			got := TruncateString(tt.s, tt.maxLen)
 			if got != tt.want {
-				t.Fatalf("truncateString(%q, %d) = %q, want %q", tt.s, tt.maxLen, got, tt.want)
+				t.Fatalf("TruncateString(%q, %d) = %q, want %q", tt.s, tt.maxLen, got, tt.want)
 			}
 		})
 	}

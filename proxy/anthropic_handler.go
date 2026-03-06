@@ -172,7 +172,7 @@ func (h *AnthropicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 
 				if status >= 400 {
-					log.Printf("[ERROR] Upstream %s returned HTTP %d, response: %s", upstream.Name, status, truncateString(string(respBody), 200))
+					log.Printf("[ERROR] Upstream %s returned HTTP %d, response: %s", upstream.Name, status, TruncateString(string(respBody), 200))
 					if h.balancer.RecordFailure(upstream.Name, currentModel) {
 						log.Printf("[CIRCUIT] Upstream %s model %s marked as unavailable after %d consecutive failures", upstream.Name, currentModel, 3)
 					}
@@ -276,16 +276,9 @@ func extractPromptPreview(messages []any) string {
 		}
 	}
 
-	return truncateString(text, 100)
+	return TruncateString(text, 100)
 }
 
-// truncateString truncates a string to maxLen and adds "..." if truncated
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
 
 func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string, originalBody []byte, clientWantsStream bool, originalReq *http.Request) (int, []byte, http.Header, *http.Response, error) {
 	var bodyMap map[string]any
