@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -147,6 +148,21 @@ func (b *BaseHandler) FilterAndOrderUpstreams(model string) ([]config.Upstream, 
 	return ordered, nil
 }
 
+// appendGeminiKey appends ?key=token (or &key=token) to rawURL using proper
+// URL parsing, unless the "key" query parameter is already present.
+func appendGeminiKey(rawURL, token string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	q := u.Query()
+	if q.Get("key") == "" {
+		q.Set("key", token)
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
+}
+
 // SetAuthHeaders sets authentication headers based on API type
 func SetAuthHeaders(req *http.Request, upstream config.Upstream, url string) string {
 	apiType := upstream.GetAPIType()
@@ -157,9 +173,7 @@ func SetAuthHeaders(req *http.Request, upstream config.Upstream, url string) str
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Del("Authorization")
 	case config.APITypeGemini:
-		if !strings.Contains(url, "key=") {
-			url = url + "?key=" + upstream.Token
-		}
+		url = appendGeminiKey(url, upstream.Token)
 		req.Header.Del("Authorization")
 		req.Header.Del("x-api-key")
 	default: // OpenAI and others

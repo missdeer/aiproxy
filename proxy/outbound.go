@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/missdeer/aiproxy/config"
 )
@@ -99,14 +98,8 @@ func doHTTPRequest(client *http.Client, url string, body []byte, upstream config
 		req.Header.Set("Authorization", "Bearer "+upstream.Token)
 		req.Header.Del("x-api-key")
 	case config.APITypeGemini:
-		if !strings.Contains(url, "key=") {
-			if strings.Contains(url, "?") {
-				url = url + "&key=" + upstream.Token
-			} else {
-				url = url + "?key=" + upstream.Token
-			}
-			req.URL, _ = req.URL.Parse(url)
-		}
+		url = appendGeminiKey(url, upstream.Token)
+		req.URL, _ = req.URL.Parse(url)
 		req.Header.Del("Authorization")
 		req.Header.Del("x-api-key")
 	}
@@ -167,14 +160,8 @@ func doHTTPRequestStream(client *http.Client, url string, body []byte, upstream 
 		req.Header.Set("Authorization", "Bearer "+upstream.Token)
 		req.Header.Del("x-api-key")
 	case config.APITypeGemini:
-		if !strings.Contains(url, "key=") {
-			if strings.Contains(url, "?") {
-				url = url + "&key=" + upstream.Token
-			} else {
-				url = url + "?key=" + upstream.Token
-			}
-			req.URL, _ = req.URL.Parse(url)
-		}
+		url = appendGeminiKey(url, upstream.Token)
+		req.URL, _ = req.URL.Parse(url)
 		req.Header.Del("Authorization")
 		req.Header.Del("x-api-key")
 	}
