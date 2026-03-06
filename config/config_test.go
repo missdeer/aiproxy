@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -419,6 +420,176 @@ upstreams:
 			if cfg.Upstreams[0].AuthFiles[i] != w {
 				t.Errorf("AuthFiles[%d] = %q, want %q", i, cfg.Upstreams[0].AuthFiles[i], w)
 			}
+		}
+	})
+}
+
+func TestValidateUpstreams(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	seq := 0
+	loadYAML := func(t *testing.T, content string) (*Config, error) {
+		t.Helper()
+		seq++
+		p := filepath.Join(tmpDir, fmt.Sprintf("test_%d.yaml", seq))
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return Load(p)
+	}
+
+	t.Run("missing name", func(t *testing.T) {
+		_, err := loadYAML(t, `
+upstreams:
+  - base_url: "https://api.example.com"
+    token: "sk-test"
+`)
+		if err == nil || !strings.Contains(err.Error(), "missing required field \"name\"") {
+			t.Fatalf("expected missing name error, got %v", err)
+		}
+	})
+
+	t.Run("duplicate name", func(t *testing.T) {
+		_, err := loadYAML(t, `
+upstreams:
+  - name: "dup"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+  - name: "dup"
+    base_url: "https://api2.example.com"
+    token: "sk-test2"
+`)
+		if err == nil || !strings.Contains(err.Error(), "duplicate name") {
+			t.Fatalf("expected duplicate name error, got %v", err)
+		}
+	})
+
+	t.Run("unknown api_type", func(t *testing.T) {
+		_, err := loadYAML(t, `
+upstreams:
+  - name: "bad-type"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+    api_type: "opanai"
+`)
+		if err == nil || !strings.Contains(err.Error(), "unknown api_type") {
+			t.Fatalf("expected unknown api_type error, got %v", err)
+		}
+	})
+
+	t.Run("token-based missing base_url", func(t *testing.T) {
+		_, err := loadYAML(t, `
+upstreams:
+  - name: "no-url"
+    token: "sk-test"
+    api_type: "anthropic"
+`)
+		if err == nil || !strings.Contains(err.Error(), "missing required field \"base_url\"") {
+			t.Fatalf("expected missing base_url error, got %v", err)
+		}
+	})
+
+	t.Run("token-based missing token", func(t *testing.T) {
+		_, err := loadYAML(t, `
+upstreams:
+  - name: "no-token"
+    base_url: "https://api.example.com"
+    api_type: "openai"
+`)
+		if err == nil || !strings.Contains(err.Error(), "missing required field \"token\"") {
+			t.Fatalf("expected missing token error, got %v", err)
+		}
+	})
+
+	t.Run("default api_type requires base_url and token", func(t *testing.T) {
+		_, err := loadYAML(t, `
+upstreams:
+  - name: "bare"
+`)
+		if err == nil || !strings.Contains(err.Error(), "missing required field \"base_url\"") {
+			t.Fatalf("expected missing base_url error for default api_type, got %v", err)
+		}
+	})
+
+	for _, apiType := range []string{"codex", "geminicli", "antigravity", "claudecode", "kiro"} {
+		t.Run("oauth missing auth_files "+apiType, func(t *testing.T) {
+			_, err := loadYAML(t, `
+upstreams:
+  - name: "oauth-no-auth"
+    api_type: "`+apiType+`"
+`)
+			if err == nil || !strings.Contains(err.Error(), "requires at least one auth_files entry") {
+				t.Fatalf("expected auth_files error for %s, got %v", apiType, err)
+			}
+		})
+	}
+
+	t.Run("oauth with auth_files passes", func(t *testing.T) {
+		cfg, err := loadYAML(t, `
+upstreams:
+  - name: "codex-ok"
+    api_type: "codex"
+    auth_files:
+      - "/path/to/auth.json"
+`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(cfg.Upstreams) != 1 {
+			t.Fatalf("expected 1 upstream, got %d", len(cfg.Upstreams))
+		}
+	})
+
+	t.Run("disabled upstream skips field validation", func(t *testing.T) {
+		cfg, err := loadYAML(t, `
+upstreams:
+  - name: "disabled-bare"
+    enabled: false
+    api_type: "anthropic"
+  - name: "active"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(cfg.Upstreams) != 2 {
+			t.Fatalf("expected 2 upstreams, got %d", len(cfg.Upstreams))
+		}
+	})
+
+	t.Run("disabled upstream still checks name and duplicates", func(t *testing.T) {
+		_, err := loadYAML(t, `
+upstreams:
+  - enabled: false
+`)
+		if err == nil || !strings.Contains(err.Error(), "missing required field \"name\"") {
+			t.Fatalf("expected missing name error even for disabled upstream, got %v", err)
+		}
+	})
+
+	t.Run("valid mixed upstreams", func(t *testing.T) {
+		_, err := loadYAML(t, `
+upstreams:
+  - name: "anthropic-1"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+    api_type: "anthropic"
+  - name: "openai-1"
+    base_url: "https://api.openai.com"
+    token: "sk-openai"
+    api_type: "openai"
+  - name: "codex-1"
+    api_type: "codex"
+    auth_files:
+      - "/path/to/auth.json"
+  - name: "kiro-1"
+    api_type: "kiro"
+    auth_files:
+      - "/path/to/kiro.json"
+`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 }

@@ -238,11 +238,86 @@ func Load(path string) (*Config, error) {
 		cfg.Log.MaxAge = 28 // 28 days
 	}
 
+	if err := validateUpstreams(cfg.Upstreams); err != nil {
+		return nil, err
+	}
+
 	if err := validateModelFallback(cfg.ModelFallback); err != nil {
 		return nil, err
 	}
 
 	return &cfg, nil
+}
+
+// validAPITypes is the set of recognized api_type values.
+var validAPITypes = map[APIType]struct{}{
+	APITypeAnthropic:   {},
+	APITypeOpenAI:      {},
+	APITypeGemini:      {},
+	APITypeResponses:   {},
+	APITypeCodex:       {},
+	APITypeGeminiCLI:   {},
+	APITypeAntigravity: {},
+	APITypeClaudeCode:  {},
+	APITypeKiro:        {},
+}
+
+// oauthAPITypes require auth_files instead of base_url + token.
+var oauthAPITypes = map[APIType]struct{}{
+	APITypeCodex:       {},
+	APITypeGeminiCLI:   {},
+	APITypeAntigravity: {},
+	APITypeClaudeCode:  {},
+	APITypeKiro:        {},
+}
+
+func validateUpstreams(upstreams []Upstream) error {
+	names := make(map[string]int) // name -> 1-based index of first occurrence
+	for i := range upstreams {
+		u := &upstreams[i]
+		idx := i + 1 // 1-based for human-readable messages
+
+		// Every upstream must have a name
+		if strings.TrimSpace(u.Name) == "" {
+			return fmt.Errorf("upstream #%d: missing required field \"name\"", idx)
+		}
+
+		// Duplicate name check
+		if prev, ok := names[u.Name]; ok {
+			return fmt.Errorf("upstream #%d %q: duplicate name (first defined at #%d)", idx, u.Name, prev)
+		}
+		names[u.Name] = idx
+
+		// Skip further validation for disabled upstreams
+		if !u.IsEnabled() {
+			continue
+		}
+
+		apiType := u.GetAPIType()
+
+		// Validate api_type is recognized
+		if u.APIType != "" {
+			if _, ok := validAPITypes[u.APIType]; !ok {
+				return fmt.Errorf("upstream #%d %q: unknown api_type %q", idx, u.Name, u.APIType)
+			}
+		}
+
+		if _, oauth := oauthAPITypes[apiType]; oauth {
+			// OAuth-based upstreams need auth_files
+			if len(u.AuthFiles) == 0 {
+				return fmt.Errorf("upstream #%d %q (api_type %q): requires at least one auth_files entry", idx, u.Name, apiType)
+			}
+		} else {
+			// Token-based upstreams need base_url and token
+			if strings.TrimSpace(u.BaseURL) == "" {
+				return fmt.Errorf("upstream #%d %q (api_type %q): missing required field \"base_url\"", idx, u.Name, apiType)
+			}
+			if strings.TrimSpace(u.Token) == "" {
+				return fmt.Errorf("upstream #%d %q (api_type %q): missing required field \"token\"", idx, u.Name, apiType)
+			}
+		}
+	}
+	return nil
 }
 
 func validateModelFallback(chain map[string]string) error {
