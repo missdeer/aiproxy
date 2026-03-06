@@ -1,4 +1,4 @@
-// Package proxy provides the Antigravity upstream handler.
+// Package proxy provides the Antigravity upstream forwarder.
 //
 // Antigravity upstream workflow:
 //  1. Read refresh_token from the JSON auth file
@@ -115,7 +115,7 @@ func antigravityRefreshAndUpdate(client *http.Client, storage *AntigravityTokenS
 	return time.Duration(tok.ExpiresIn) * time.Second, nil
 }
 
-// ── ForwardToAntigravity: called by other handlers' forwardRequest ──────────
+// ── ForwardToAntigravity: called by handlers via OutboundSender ──────────
 
 // buildAntigravityBasePayload parses and transforms the request body in ways
 // that are independent of which auth file is used. The "project" and "requestId"

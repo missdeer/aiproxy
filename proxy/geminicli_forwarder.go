@@ -1,4 +1,4 @@
-// Package proxy provides the Gemini CLI upstream handler.
+// Package proxy provides the Gemini CLI upstream forwarder.
 //
 // Gemini CLI upstream workflow:
 //  1. Read OAuth token from the JSON auth file
@@ -151,7 +151,7 @@ func geminiCLIRefreshAndUpdate(client *http.Client, storage *GeminiCLITokenStora
 	return expiresIn, nil
 }
 
-// ── ForwardToGeminiCLI: called by other handlers' forwardRequest ──────────
+// ── ForwardToGeminiCLI: called by handlers via OutboundSender ──────────
 
 // buildGeminiCLIBasePayload parses and transforms the request body in ways
 // that are independent of which auth file is used. The "project" field

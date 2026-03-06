@@ -1,4 +1,4 @@
-// Package proxy provides the Codex upstream handler.
+// Package proxy provides the Codex upstream forwarder.
 //
 // Codex upstream workflow:
 //  1. Read refresh_token from the JSON auth file
@@ -113,7 +113,7 @@ func codexRefreshAndUpdate(client *http.Client, storage *CodexTokenStorage, auth
 	return time.Duration(tok.ExpiresIn) * time.Second, nil
 }
 
-// ── ForwardToCodex: called by other handlers' forwardRequest ──────────
+// ── ForwardToCodex: called by handlers via OutboundSender ──────────
 
 // buildCodexBasePayload parses and transforms the request body in ways that
 // are independent of which auth file is used.

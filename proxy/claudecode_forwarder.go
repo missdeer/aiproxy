@@ -1,4 +1,4 @@
-// Package proxy provides the Claude Code upstream handler.
+// Package proxy provides the Claude Code upstream forwarder.
 //
 // Claude Code upstream workflow:
 //  1. Read refresh_token from the JSON auth file
@@ -102,7 +102,7 @@ func claudeCodeRefreshAndUpdate(client *http.Client, storage *ClaudeCodeTokenSto
 	return time.Duration(tok.ExpiresIn) * time.Second, nil
 }
 
-// ── ForwardToClaudeCode: called by other handlers' forwardRequest ──────────
+// ── ForwardToClaudeCode: called by handlers via OutboundSender ──────────
 
 // buildClaudeCodeBasePayload parses and transforms the request body in ways
 // that are independent of which auth file is used.
