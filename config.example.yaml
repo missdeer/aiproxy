@@ -44,6 +44,9 @@ upstreams:
     api_type: "anthropic"
     request_compression: "zstd"
     enabled: false
+    http_headers:
+      "X-Custom-Header": "custom-value"
+      "X-Another-Header": "another-value"
     # Model name mappings for this upstream
     # Key: client model name, Value: upstream model name
     model_mappings:

@@ -669,6 +669,58 @@ upstreams:
 	})
 }
 
+func TestLoadHTTPHeaders(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+    http_headers:
+      "X-Custom": "value1"
+      "Authorization": "Bearer override"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	h := cfg.Upstreams[0].HTTPHeaders
+	if len(h) != 2 {
+		t.Fatalf("HTTPHeaders count = %d, want 2", len(h))
+	}
+	if h["X-Custom"] != "value1" {
+		t.Errorf("HTTPHeaders[X-Custom] = %q, want %q", h["X-Custom"], "value1")
+	}
+	if h["Authorization"] != "Bearer override" {
+		t.Errorf("HTTPHeaders[Authorization] = %q, want %q", h["Authorization"], "Bearer override")
+	}
+}
+
+func TestLoadHTTPHeadersEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Upstreams[0].HTTPHeaders != nil {
+		t.Errorf("HTTPHeaders = %v, want nil", cfg.Upstreams[0].HTTPHeaders)
+	}
+}
+
 func TestModelFallback(t *testing.T) {
 	t.Run("parses from YAML", func(t *testing.T) {
 		tmpDir := t.TempDir()

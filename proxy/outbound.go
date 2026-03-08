@@ -109,6 +109,7 @@ func doHTTPRequest(client *http.Client, url string, body []byte, upstream config
 	if _, err := ApplyBodyCompression(req, body, upstream); err != nil {
 		return 0, nil, nil, fmt.Errorf("request body compression: %w", err)
 	}
+	ApplyCustomHeaders(req, upstream)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -171,6 +172,7 @@ func doHTTPRequestStream(client *http.Client, url string, body []byte, upstream 
 	if _, err := ApplyBodyCompression(req, body, upstream); err != nil {
 		return nil, fmt.Errorf("request body compression: %w", err)
 	}
+	ApplyCustomHeaders(req, upstream)
 
 	return client.Do(req)
 }

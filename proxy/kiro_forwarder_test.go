@@ -316,6 +316,36 @@ func TestKiroLoadStorageGeneratesMachineID(t *testing.T) {
 	}
 }
 
+func TestBuildKiroRequestAppliesCustomHeaders(t *testing.T) {
+	upstream := config.Upstream{
+		Name:               "kiro-test",
+		RequestCompression: "none",
+		HTTPHeaders: map[string]string{
+			"Authorization": "Bearer override",
+			"X-Custom":      "custom-value",
+			"Host":          "kiro.internal",
+		},
+	}
+	storage := &KiroTokenStorage{MachineId: "mid-1"}
+
+	req, err := buildKiroRequest(upstream, []byte(`{}`), "token", storage, kiroEndpoint{
+		URL:       "https://q.us-east-1.amazonaws.com/generateAssistantResponse",
+		AmzTarget: "AmazonQDeveloperStreamingService.SendMessage",
+	})
+	if err != nil {
+		t.Fatalf("buildKiroRequest() error = %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer override" {
+		t.Fatalf("Authorization = %q, want %q", got, "Bearer override")
+	}
+	if got := req.Header.Get("X-Custom"); got != "custom-value" {
+		t.Fatalf("X-Custom = %q, want %q", got, "custom-value")
+	}
+	if got := req.Host; got != "kiro.internal" {
+		t.Fatalf("Host = %q, want %q", got, "kiro.internal")
+	}
+}
+
 func TestForwardToKiro_StreamModeReturnsAnthropicSSE(t *testing.T) {
 	tmpDir := t.TempDir()
 	authFile := filepath.Join(tmpDir, "kiro-auth.json")

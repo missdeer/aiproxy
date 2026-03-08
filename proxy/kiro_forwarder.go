@@ -859,6 +859,7 @@ func buildKiroRequest(upstream config.Upstream, body []byte, accessToken string,
 	if _, err := ApplyBodyCompression(req, body, upstream); err != nil {
 		return nil, fmt.Errorf("request body compression: %w", err)
 	}
+	ApplyCustomHeaders(req, upstream)
 	return req, nil
 }
 

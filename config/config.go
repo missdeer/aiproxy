@@ -31,16 +31,17 @@ const (
 )
 
 type Upstream struct {
-	Name               string       `yaml:"name"`
-	Enabled            *bool        `yaml:"enabled"` // Whether this upstream is enabled, defaults to true
-	BaseURL            string       `yaml:"base_url"`
-	Token              string       `yaml:"token"`
-	Weight             int          `yaml:"weight"`
-	ModelMappings      ModelMapping `yaml:"model_mappings"`
-	AvailableModels    []string     `yaml:"available_models"`
-	APIType            APIType      `yaml:"api_type"`            // "anthropic", "openai", "gemini", "responses", or "codex"
-	AuthFiles          []string     `yaml:"auth_files"`          // Paths to auth JSON files (used by codex api_type, round-robin)
-	RequestCompression string       `yaml:"request_compression"` // zstd (default), gzip, br, none
+	Name               string            `yaml:"name"`
+	Enabled            *bool             `yaml:"enabled"` // Whether this upstream is enabled, defaults to true
+	BaseURL            string            `yaml:"base_url"`
+	Token              string            `yaml:"token"`
+	Weight             int               `yaml:"weight"`
+	ModelMappings      ModelMapping      `yaml:"model_mappings"`
+	AvailableModels    []string          `yaml:"available_models"`
+	APIType            APIType           `yaml:"api_type"`            // "anthropic", "openai", "gemini", "responses", or "codex"
+	AuthFiles          []string          `yaml:"auth_files"`          // Paths to auth JSON files (used by codex api_type, round-robin)
+	RequestCompression string            `yaml:"request_compression"` // zstd (default), gzip, br, none
+	HTTPHeaders        map[string]string `yaml:"http_headers"`
 }
 
 // IsEnabled returns whether this upstream is enabled (defaults to true)

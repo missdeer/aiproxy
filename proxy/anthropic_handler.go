@@ -275,7 +275,6 @@ func extractAnthropicPromptPreview(messages []any) string {
 	return TruncateString(text, 100)
 }
 
-
 func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string, originalBody []byte, clientWantsStream bool, originalReq *http.Request) (int, []byte, http.Header, *http.Response, error) {
 	var bodyMap map[string]any
 	if err := json.Unmarshal(originalBody, &bodyMap); err != nil {

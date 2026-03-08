@@ -120,6 +120,7 @@ func forwardWithAuthRetry[S any](
 			lastErr = err
 			continue
 		}
+		ApplyCustomHeaders(req, upstream)
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -240,6 +241,7 @@ func forwardStreamWithAuthRetry[S any](
 			lastErr = err
 			continue
 		}
+		ApplyCustomHeaders(req, upstream)
 
 		resp, err := client.Do(req)
 		if err != nil {

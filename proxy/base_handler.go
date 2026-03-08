@@ -65,6 +65,18 @@ func ApplyAcceptEncoding(req *http.Request, upstream config.Upstream) {
 	req.Header.Set("Accept-Encoding", upstream.GetAcceptEncoding())
 }
 
+// ApplyCustomHeaders applies user-configured http_headers from the upstream config.
+// Must be called last, after all other headers are set, so custom values win.
+func ApplyCustomHeaders(req *http.Request, upstream config.Upstream) {
+	for k, v := range upstream.HTTPHeaders {
+		if http.CanonicalHeaderKey(k) == "Host" {
+			req.Host = v
+			continue
+		}
+		req.Header.Set(k, v)
+	}
+}
+
 // ApplyBodyCompression mutates request/body according to upstream request_compression.
 // Returns the final body bytes actually attached to req.
 func ApplyBodyCompression(req *http.Request, body []byte, upstream config.Upstream) ([]byte, error) {
