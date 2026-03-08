@@ -539,9 +539,9 @@ func TestGeminiHandler_NoSupportedModel_NoFallback_ReturnsModelNotFound(t *testi
 			{
 				Name:            "upstream-1",
 				BaseURL:         "https://api.example.com",
-				Token:           "sk-test",
+				Tokens:          config.TokenList{"sk-test"},
 				APIType:         config.APITypeGemini,
-				AvailableModels: []string{"gemini-2.5-pro"},
+				AvailableModels: config.AvailableModelList{"gemini-2.5-pro"},
 			},
 		},
 	}

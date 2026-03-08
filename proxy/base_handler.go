@@ -176,18 +176,19 @@ func appendGeminiKey(rawURL, token string) string {
 // SetAuthHeaders sets authentication headers based on API type
 func SetAuthHeaders(req *http.Request, upstream config.Upstream, url string) string {
 	apiType := upstream.GetAPIType()
+	token := upstream.NextToken()
 
 	switch apiType {
 	case config.APITypeAnthropic:
-		req.Header.Set("x-api-key", upstream.Token)
+		req.Header.Set("x-api-key", token)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Del("Authorization")
 	case config.APITypeGemini:
-		url = appendGeminiKey(url, upstream.Token)
+		url = appendGeminiKey(url, token)
 		req.Header.Del("Authorization")
 		req.Header.Del("x-api-key")
-	default: // OpenAI and others
-		req.Header.Set("Authorization", "Bearer "+upstream.Token)
+	default:
+		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Del("x-api-key")
 	}
 

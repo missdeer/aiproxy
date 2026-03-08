@@ -668,7 +668,7 @@ func TestForwardToCodex_StripsCompactFields(t *testing.T) {
 
 	upstream := config.Upstream{
 		Name:      "test-codex",
-		AuthFiles: []string{authFile},
+		AuthFiles: config.AuthFileList{authFile},
 	}
 
 	requestBody := []byte(`{
@@ -709,7 +709,7 @@ func TestForwardToCodex_InvalidRequestBody(t *testing.T) {
 
 	upstream := config.Upstream{
 		Name:      "test-codex",
-		AuthFiles: []string{authFile},
+		AuthFiles: config.AuthFileList{authFile},
 	}
 
 	_, _, _, err := ForwardToCodex(&http.Client{}, upstream, []byte("not-json"), false)

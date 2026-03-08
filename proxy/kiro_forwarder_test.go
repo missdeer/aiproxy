@@ -379,7 +379,7 @@ func TestForwardToKiro_StreamModeReturnsAnthropicSSE(t *testing.T) {
 
 	upstream := config.Upstream{
 		Name:      "kiro-test",
-		AuthFiles: []string{authFile},
+		AuthFiles: config.AuthFileList{authFile},
 	}
 	status, body, headers, err := ForwardToKiro(client, upstream, []byte(`{"model":"claude-sonnet-4","input":"hi"}`), true)
 	if err != nil {
@@ -436,7 +436,7 @@ func TestForwardToKiro_AllEndpoints429ReturnsStatusBody(t *testing.T) {
 
 	upstream := config.Upstream{
 		Name:      "kiro-test",
-		AuthFiles: []string{authFile},
+		AuthFiles: config.AuthFileList{authFile},
 	}
 	status, body, headers, err := ForwardToKiro(client, upstream, []byte(`{"model":"claude-sonnet-4","input":"hi"}`), false)
 	if err != nil {
@@ -487,7 +487,7 @@ func TestForwardToKiroStream_AllEndpoints429ReturnsResponse(t *testing.T) {
 
 	upstream := config.Upstream{
 		Name:      "kiro-test",
-		AuthFiles: []string{authFile},
+		AuthFiles: config.AuthFileList{authFile},
 	}
 	resp, err := ForwardToKiroStream(client, upstream, []byte(`{"model":"claude-sonnet-4","input":"hi"}`), context.Background())
 	if err != nil {

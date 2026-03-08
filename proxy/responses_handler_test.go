@@ -66,9 +66,9 @@ func TestResponsesHandler_NoSupportedModel_NoFallback_ReturnsModelNotFound(t *te
 			{
 				Name:            "upstream-1",
 				BaseURL:         "https://api.example.com",
-				Token:           "sk-test",
+				Tokens:          config.TokenList{"sk-test"},
 				APIType:         config.APITypeResponses,
-				AvailableModels: []string{"gpt-4o"},
+				AvailableModels: config.AvailableModelList{"gpt-4o"},
 			},
 		},
 	}
@@ -122,7 +122,7 @@ func TestResponsesHandler_ForwardRequest_NativeResponsesCompactPreservesPathAndQ
 	upstream := config.Upstream{
 		Name:    "test-upstream",
 		BaseURL: "https://api.example.com/",
-		Token:   "sk-test",
+		Tokens:  config.TokenList{"sk-test"},
 		APIType: config.APITypeResponses,
 	}
 
@@ -172,9 +172,9 @@ func TestResponsesRouteReachability(t *testing.T) {
 			{
 				Name:            "test-upstream",
 				BaseURL:         "https://api.example.com",
-				Token:           "sk-test",
+				Tokens:          config.TokenList{"sk-test"},
 				APIType:         config.APITypeResponses,
-				AvailableModels: []string{"gpt-4o"},
+				AvailableModels: config.AvailableModelList{"gpt-4o"},
 			},
 		},
 	}

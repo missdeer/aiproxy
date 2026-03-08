@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 
 	"github.com/missdeer/aiproxy/config"
@@ -67,9 +68,56 @@ func HandleStreamResponse(resp *http.Response) (status int, errBody []byte, head
 	return resp.StatusCode, nil, nil, resp, nil
 }
 
-// doHTTPRequest builds and executes an HTTP POST request to the given URL
-// with appropriate authentication headers based on the API type.
+// doHTTPRequest builds and executes HTTP POST requests to the given URL.
+// When the upstream has multiple tokens, it iterates them in round-robin
+// order with failover on 4xx/5xx, mirroring the auth_files retry pattern.
 func doHTTPRequest(client *http.Client, url string, body []byte, upstream config.Upstream, apiType config.APIType, originalReq *http.Request, rawQuery string) (int, []byte, http.Header, error) {
+	tokens := upstream.Tokens
+	if len(tokens) <= 1 {
+		tok := ""
+		if len(tokens) == 1 {
+			tok = tokens[0]
+		}
+		return doHTTPRequestSingle(client, url, body, upstream, apiType, originalReq, rawQuery, tok)
+	}
+
+	start := upstream.TokenStartIndex()
+	n := len(tokens)
+	var lastStatus int
+	var lastBody []byte
+	var lastHeaders http.Header
+	var lastErr error
+
+	for i := 0; i < n; i++ {
+		if err := originalReq.Context().Err(); err != nil {
+			return 0, nil, nil, err
+		}
+		tok := tokens[(start+i)%n]
+		status, respBody, headers, err := doHTTPRequestSingle(client, url, body, upstream, apiType, originalReq, rawQuery, tok)
+		if err != nil {
+			log.Printf("[TOKEN] upstream %q token %d/%d: %v", upstream.Name, i+1, n, err)
+			lastErr = err
+			lastStatus = http.StatusBadGateway
+			continue
+		}
+		if status >= 400 {
+			log.Printf("[TOKEN] upstream %q token %d/%d: HTTP %d", upstream.Name, i+1, n, status)
+			lastStatus = status
+			lastBody = respBody
+			lastHeaders = headers
+			lastErr = fmt.Errorf("upstream returned status %d", status)
+			continue
+		}
+		return status, respBody, headers, nil
+	}
+
+	if lastBody != nil {
+		return lastStatus, lastBody, lastHeaders, nil
+	}
+	return 0, nil, nil, lastErr
+}
+
+func doHTTPRequestSingle(client *http.Client, url string, body []byte, upstream config.Upstream, apiType config.APIType, originalReq *http.Request, rawQuery string, token string) (int, []byte, http.Header, error) {
 	if rawQuery != "" {
 		url = url + "?" + rawQuery
 	}
@@ -79,7 +127,6 @@ func doHTTPRequest(client *http.Client, url string, body []byte, upstream config
 		return 0, nil, nil, err
 	}
 
-	// Copy headers from original request
 	for k, vv := range originalReq.Header {
 		for _, v := range vv {
 			req.Header.Add(k, v)
@@ -88,17 +135,16 @@ func doHTTPRequest(client *http.Client, url string, body []byte, upstream config
 
 	StripHopByHopHeaders(req.Header)
 
-	// Set authentication based on API type
 	switch apiType {
 	case config.APITypeAnthropic:
-		req.Header.Set("x-api-key", upstream.Token)
+		req.Header.Set("x-api-key", token)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Del("Authorization")
 	case config.APITypeOpenAI, config.APITypeResponses:
-		req.Header.Set("Authorization", "Bearer "+upstream.Token)
+		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Del("x-api-key")
 	case config.APITypeGemini:
-		url = appendGeminiKey(url, upstream.Token)
+		url = appendGeminiKey(url, token)
 		req.URL, _ = req.URL.Parse(url)
 		req.Header.Del("Authorization")
 		req.Header.Del("x-api-key")
@@ -128,11 +174,60 @@ func doHTTPRequest(client *http.Client, url string, body []byte, upstream config
 	return resp.StatusCode, respBody, headers, nil
 }
 
-// doHTTPRequestStream builds and executes an HTTP request like doHTTPRequest,
+// doHTTPRequestStream builds and executes HTTP requests like doHTTPRequest,
 // but returns the raw *http.Response without reading the body.
-// The caller is responsible for closing resp.Body.
-// Uses originalReq.Context() for cancellation propagation.
+// When the upstream has multiple tokens, it iterates them with failover.
 func doHTTPRequestStream(client *http.Client, url string, body []byte, upstream config.Upstream, apiType config.APIType, originalReq *http.Request, rawQuery string) (*http.Response, error) {
+	tokens := upstream.Tokens
+	if len(tokens) <= 1 {
+		tok := ""
+		if len(tokens) == 1 {
+			tok = tokens[0]
+		}
+		return doHTTPRequestStreamSingle(client, url, body, upstream, apiType, originalReq, rawQuery, tok)
+	}
+
+	start := upstream.TokenStartIndex()
+	n := len(tokens)
+	var lastErr error
+	var lastResp *http.Response
+
+	for i := 0; i < n; i++ {
+		if err := originalReq.Context().Err(); err != nil {
+			if lastResp != nil {
+				lastResp.Body.Close()
+			}
+			return nil, err
+		}
+		tok := tokens[(start+i)%n]
+		resp, err := doHTTPRequestStreamSingle(client, url, body, upstream, apiType, originalReq, rawQuery, tok)
+		if err != nil {
+			log.Printf("[TOKEN] upstream %q token %d/%d (stream): %v", upstream.Name, i+1, n, err)
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode >= 400 {
+			log.Printf("[TOKEN] upstream %q token %d/%d (stream): HTTP %d", upstream.Name, i+1, n, resp.StatusCode)
+			lastErr = fmt.Errorf("upstream returned status %d", resp.StatusCode)
+			if lastResp != nil {
+				lastResp.Body.Close()
+			}
+			lastResp = resp
+			continue
+		}
+		if lastResp != nil {
+			lastResp.Body.Close()
+		}
+		return resp, nil
+	}
+
+	if lastResp != nil {
+		return lastResp, nil
+	}
+	return nil, lastErr
+}
+
+func doHTTPRequestStreamSingle(client *http.Client, url string, body []byte, upstream config.Upstream, apiType config.APIType, originalReq *http.Request, rawQuery string, token string) (*http.Response, error) {
 	if rawQuery != "" {
 		url = url + "?" + rawQuery
 	}
@@ -142,7 +237,6 @@ func doHTTPRequestStream(client *http.Client, url string, body []byte, upstream 
 		return nil, err
 	}
 
-	// Copy headers from original request
 	for k, vv := range originalReq.Header {
 		for _, v := range vv {
 			req.Header.Add(k, v)
@@ -151,17 +245,16 @@ func doHTTPRequestStream(client *http.Client, url string, body []byte, upstream 
 
 	StripHopByHopHeaders(req.Header)
 
-	// Set authentication based on API type
 	switch apiType {
 	case config.APITypeAnthropic:
-		req.Header.Set("x-api-key", upstream.Token)
+		req.Header.Set("x-api-key", token)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Del("Authorization")
 	case config.APITypeOpenAI, config.APITypeResponses:
-		req.Header.Set("Authorization", "Bearer "+upstream.Token)
+		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Del("x-api-key")
 	case config.APITypeGemini:
-		url = appendGeminiKey(url, upstream.Token)
+		url = appendGeminiKey(url, token)
 		req.URL, _ = req.URL.Parse(url)
 		req.Header.Del("Authorization")
 		req.Header.Del("x-api-key")

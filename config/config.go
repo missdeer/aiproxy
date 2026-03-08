@@ -31,18 +31,66 @@ const (
 	APITypeKiro        APIType = "kiro"        // codewhisperer/q.amazonaws.com (OAuth, AWS Event Stream)
 )
 
+// unmarshalStringOrSlice decodes a YAML node that is either a scalar string
+// or a sequence of strings. All three list types below share this logic.
+func unmarshalStringOrSlice(value *yaml.Node) ([]string, error) {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		switch value.Tag {
+		case "", "!!str":
+			return []string{value.Value}, nil
+		case "!!null":
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("expected a string or a list of strings")
+		}
+	case yaml.SequenceNode:
+		var items []string
+		if err := value.Decode(&items); err != nil {
+			return nil, err
+		}
+		return items, nil
+	default:
+		return nil, fmt.Errorf("expected a string or a list of strings")
+	}
+}
+
+type TokenList []string
+
+func (t *TokenList) UnmarshalYAML(value *yaml.Node) error {
+	v, err := unmarshalStringOrSlice(value)
+	*t = v
+	return err
+}
+
+type AuthFileList []string
+
+func (a *AuthFileList) UnmarshalYAML(value *yaml.Node) error {
+	v, err := unmarshalStringOrSlice(value)
+	*a = v
+	return err
+}
+
+type AvailableModelList []string
+
+func (m *AvailableModelList) UnmarshalYAML(value *yaml.Node) error {
+	v, err := unmarshalStringOrSlice(value)
+	*m = v
+	return err
+}
+
 type Upstream struct {
-	Name               string            `yaml:"name"`
-	Enabled            *bool             `yaml:"enabled"` // Whether this upstream is enabled, defaults to true
-	BaseURL            string            `yaml:"base_url"`
-	Token              string            `yaml:"token"`
-	Weight             int               `yaml:"weight"`
-	ModelMappings      ModelMapping      `yaml:"model_mappings"`
-	AvailableModels    []string          `yaml:"available_models"`
-	APIType            APIType           `yaml:"api_type"`            // "anthropic", "openai", "gemini", "responses", or "codex"
-	AuthFiles          []string          `yaml:"auth_files"`          // Paths to auth JSON files (used by codex api_type, round-robin)
-	RequestCompression string            `yaml:"request_compression"` // zstd (default), gzip, br, none
-	HTTPHeaders        map[string]string `yaml:"http_headers"`
+	Name               string             `yaml:"name"`
+	Enabled            *bool              `yaml:"enabled"`
+	BaseURL            string             `yaml:"base_url"`
+	Tokens             TokenList          `yaml:"token"`
+	Weight             int                `yaml:"weight"`
+	ModelMappings      ModelMapping       `yaml:"model_mappings"`
+	AvailableModels    AvailableModelList `yaml:"available_models"`
+	APIType            APIType            `yaml:"api_type"`
+	AuthFiles          AuthFileList       `yaml:"auth_files"`
+	RequestCompression string             `yaml:"request_compression"`
+	HTTPHeaders        map[string]string  `yaml:"http_headers"`
 }
 
 // IsEnabled returns whether this upstream is enabled (defaults to true)
@@ -130,6 +178,37 @@ func (u *Upstream) AuthFileStartIndex() int {
 	return nextAuthFileIndex(u.Name, len(u.AuthFiles))
 }
 
+// NextToken returns the next API token using round-robin.
+// Safe for concurrent use. Uses upstream name + ":token" as the key.
+func (u *Upstream) NextToken() string {
+	if len(u.Tokens) == 0 {
+		return ""
+	}
+	if len(u.Tokens) == 1 {
+		return u.Tokens[0]
+	}
+	idx := nextTokenIndex(u.Name, len(u.Tokens))
+	return u.Tokens[idx]
+}
+
+var tokenCounters sync.Map // map[string]*atomic.Uint64
+
+func nextTokenIndex(name string, n int) int {
+	key := name + "\x00token"
+	v, _ := tokenCounters.LoadOrStore(key, &atomic.Uint64{})
+	ctr := v.(*atomic.Uint64)
+	idx := ctr.Add(1) - 1
+	return int(idx % uint64(n))
+}
+
+// TokenStartIndex returns the next round-robin index for this upstream's tokens.
+func (u *Upstream) TokenStartIndex() int {
+	if len(u.Tokens) == 0 {
+		return 0
+	}
+	return nextTokenIndex(u.Name, len(u.Tokens))
+}
+
 func (u *Upstream) SupportsModel(model string) bool {
 	if len(u.AvailableModels) == 0 {
 		return true // 未配置则支持所有模型
@@ -203,6 +282,28 @@ func Load(path string) (*Config, error) {
 		}
 		if cfg.Upstreams[i].RequestCompression == "" {
 			cfg.Upstreams[i].RequestCompression = "zstd"
+		}
+		// Strip empty/whitespace-only token entries.
+		if len(cfg.Upstreams[i].Tokens) > 0 {
+			filtered := cfg.Upstreams[i].Tokens[:0]
+			for _, t := range cfg.Upstreams[i].Tokens {
+				if strings.TrimSpace(t) != "" {
+					filtered = append(filtered, t)
+				}
+			}
+			cfg.Upstreams[i].Tokens = filtered
+		}
+		// Deduplicate Tokens.
+		if len(cfg.Upstreams[i].Tokens) > 1 {
+			seen := make(map[string]struct{})
+			unique := make([]string, 0, len(cfg.Upstreams[i].Tokens))
+			for _, t := range cfg.Upstreams[i].Tokens {
+				if _, dup := seen[t]; !dup {
+					seen[t] = struct{}{}
+					unique = append(unique, t)
+				}
+			}
+			cfg.Upstreams[i].Tokens = unique
 		}
 		// Strip empty/whitespace-only auth_files entries.
 		if len(cfg.Upstreams[i].AuthFiles) > 0 {
@@ -340,7 +441,7 @@ func validateUpstreams(upstreams []Upstream) error {
 			if strings.TrimSpace(u.BaseURL) == "" {
 				return fmt.Errorf("upstream #%d %q (api_type %q): missing required field \"base_url\"", idx, u.Name, apiType)
 			}
-			if strings.TrimSpace(u.Token) == "" {
+			if len(u.Tokens) == 0 {
 				return fmt.Errorf("upstream #%d %q (api_type %q): missing required field \"token\"", idx, u.Name, apiType)
 			}
 		}

@@ -39,6 +39,7 @@ model_fallback:
 upstreams:
   - name: "runanytime"
     base_url: "https://runanytime.hxi.me"
+    # token accepts a single string or a list for round-robin with failover
     token: "sk-"
     weight: 10
     api_type: "anthropic"
@@ -157,7 +158,10 @@ upstreams:
   # Use api_type: "openai" for OpenAI-compatible services
   - name: "OpenAI Compatible"
     base_url: "https://api.openai.com"
-    token: "sk-your-openai-key"
+    # Multiple tokens: round-robin with automatic failover on 4xx/5xx
+    token:
+      - "sk-your-openai-key-1"
+      - "sk-your-openai-key-2"
     weight: 5
     enabled: false
     api_type: "openai"  # Use OpenAI API format (Authorization: Bearer header, /v1/chat/completions endpoint)

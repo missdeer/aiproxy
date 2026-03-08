@@ -167,9 +167,9 @@ func TestAnthropicHandler_NoSupportedModel_NoFallback_ReturnsBadRequest(t *testi
 			{
 				Name:            "upstream-1",
 				BaseURL:         "https://api.example.com",
-				Token:           "sk-test",
+				Tokens:          config.TokenList{"sk-test"},
 				APIType:         config.APITypeAnthropic,
-				AvailableModels: []string{"claude-sonnet"},
+				AvailableModels: config.AvailableModelList{"claude-sonnet"},
 			},
 		},
 	}

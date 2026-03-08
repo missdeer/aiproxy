@@ -27,7 +27,7 @@ func TestIterAuthFiles_Empty(t *testing.T) {
 func TestIterAuthFiles_Single(t *testing.T) {
 	upstream := config.Upstream{
 		Name:      "test",
-		AuthFiles: []string{"/a.json"},
+		AuthFiles: config.AuthFileList{"/a.json"},
 	}
 	attempts, err := iterAuthFiles(upstream)
 	if err != nil {
@@ -47,7 +47,7 @@ func TestIterAuthFiles_Single(t *testing.T) {
 func TestIterAuthFiles_Multiple(t *testing.T) {
 	upstream := config.Upstream{
 		Name:      "test",
-		AuthFiles: []string{"/a.json", "/b.json", "/c.json"},
+		AuthFiles: config.AuthFileList{"/a.json", "/b.json", "/c.json"},
 	}
 	attempts, err := iterAuthFiles(upstream)
 	if err != nil {

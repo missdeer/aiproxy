@@ -36,7 +36,7 @@ func TestDoHTTPRequest_AcceptEncodingFixedCapabilities(t *testing.T) {
 
 			upstream := tt.upstream
 			upstream.BaseURL = upstreamSrv.URL
-			upstream.Token = "test-token"
+			upstream.Tokens = config.TokenList{"test-token"}
 
 			client := newHTTPClient(10 * time.Second)
 			status, _, _, err := doHTTPRequest(client, upstreamSrv.URL, []byte(`{}`), upstream, config.APITypeOpenAI, originalReq, "")
@@ -79,7 +79,7 @@ func TestDoHTTPRequestStream_AcceptEncodingFixedCapabilities(t *testing.T) {
 
 			upstream := tt.upstream
 			upstream.BaseURL = upstreamSrv.URL
-			upstream.Token = "test-token"
+			upstream.Tokens = config.TokenList{"test-token"}
 
 			client := newHTTPClient(10 * time.Second)
 			resp, err := doHTTPRequestStream(client, upstreamSrv.URL, []byte(`{}`), upstream, config.APITypeOpenAI, originalReq, "")

@@ -216,9 +216,9 @@ func TestOpenAIHandler_NoSupportedModel_NoFallback_ReturnsModelNotFound(t *testi
 			{
 				Name:            "upstream-1",
 				BaseURL:         "https://api.example.com",
-				Token:           "sk-test",
+				Tokens:          config.TokenList{"sk-test"},
 				APIType:         config.APITypeOpenAI,
-				AvailableModels: []string{"gpt-4o"},
+				AvailableModels: config.AvailableModelList{"gpt-4o"},
 			},
 		},
 	}
@@ -265,9 +265,9 @@ func TestOpenAIHandler_ModelFallback_Success(t *testing.T) {
 			{
 				Name:            "upstream-1",
 				BaseURL:         upstream.URL,
-				Token:           "sk-test",
+				Tokens:          config.TokenList{"sk-test"},
 				APIType:         config.APITypeOpenAI,
-				AvailableModels: []string{"gpt-4o"},
+				AvailableModels: config.AvailableModelList{"gpt-4o"},
 			},
 		},
 		ModelFallback: map[string]string{
@@ -302,9 +302,9 @@ func TestOpenAIHandler_ModelFallback_CycleTerminates(t *testing.T) {
 			{
 				Name:            "upstream-1",
 				BaseURL:         "https://api.example.com",
-				Token:           "sk-test",
+				Tokens:          config.TokenList{"sk-test"},
 				APIType:         config.APITypeOpenAI,
-				AvailableModels: []string{"gpt-4o"},
+				AvailableModels: config.AvailableModelList{"gpt-4o"},
 			},
 		},
 		ModelFallback: map[string]string{

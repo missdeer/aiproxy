@@ -8,9 +8,9 @@ import (
 
 func TestWeightedRoundRobin_Next(t *testing.T) {
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true)},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true)},
-		{Name: "c", BaseURL: "http://c", Token: "c", Weight: 1, Enabled: boolPtr(true)},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 1, Enabled: boolPtr(true)},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true)},
+		{Name: "c", BaseURL: "http://c", Tokens: config.TokenList{"c"}, Weight: 1, Enabled: boolPtr(true)},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -34,9 +34,9 @@ func TestWeightedRoundRobin_Next(t *testing.T) {
 
 func TestWeightedRoundRobin_NextForModel(t *testing.T) {
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"model-x"}},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"model-y"}},
-		{Name: "c", BaseURL: "http://c", Token: "c", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"model-x"}},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-x"}},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-y"}},
+		{Name: "c", BaseURL: "http://c", Tokens: config.TokenList{"c"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-x"}},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -70,9 +70,9 @@ func TestWeightedRoundRobin_NextForModel(t *testing.T) {
 
 func TestWeightedRoundRobin_NextForModelWithWeights(t *testing.T) {
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 2, Enabled: boolPtr(true), AvailableModels: []string{"model-x"}},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"model-y"}},
-		{Name: "c", BaseURL: "http://c", Token: "c", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"model-x"}},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 2, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-x"}},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-y"}},
+		{Name: "c", BaseURL: "http://c", Tokens: config.TokenList{"c"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-x"}},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -100,8 +100,8 @@ func TestWeightedRoundRobin_NextForModelWithWeights(t *testing.T) {
 
 func TestWeightedRoundRobin_NextForModelNoMatch(t *testing.T) {
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"model-x"}},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"model-y"}},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-x"}},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-y"}},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -115,9 +115,9 @@ func TestWeightedRoundRobin_NextForModelNoMatch(t *testing.T) {
 func TestWeightedRoundRobin_NextForModelWithSkewedWeights(t *testing.T) {
 	// Test with skewed weights where low-weight upstream might be skipped
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 10, Enabled: boolPtr(true), AvailableModels: []string{"model-y"}},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"model-x"}},
-		{Name: "c", BaseURL: "http://c", Token: "c", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"model-x"}},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 10, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-y"}},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-x"}},
+		{Name: "c", BaseURL: "http://c", Tokens: config.TokenList{"c"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-x"}},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -136,9 +136,9 @@ func TestWeightedRoundRobin_NextForModelWithSkewedWeights(t *testing.T) {
 
 func TestWeightedRoundRobin_NextForModelWithUnavailable(t *testing.T) {
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"model-x"}},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"model-x"}},
-		{Name: "c", BaseURL: "http://c", Token: "c", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"model-x"}},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-x"}},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-x"}},
+		{Name: "c", BaseURL: "http://c", Tokens: config.TokenList{"c"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"model-x"}},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -167,9 +167,9 @@ func TestWeightedRoundRobin_NextForModelWithUnavailable(t *testing.T) {
 
 func TestWeightedRoundRobin_NextMatching(t *testing.T) {
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true)},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true)},
-		{Name: "c", BaseURL: "http://c", Token: "c", Weight: 1, Enabled: boolPtr(true)},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 1, Enabled: boolPtr(true)},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true)},
+		{Name: "c", BaseURL: "http://c", Tokens: config.TokenList{"c"}, Weight: 1, Enabled: boolPtr(true)},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -199,9 +199,9 @@ func TestWeightedRoundRobin_NextMatchingNoMatchDoesNotBias(t *testing.T) {
 	// Regression: interleaving no-match NextMatching calls should not bias
 	// subsequent matching calls. Mirrors NextForModelNoMatchDoesNotBias.
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 10, Enabled: boolPtr(true)},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true)},
-		{Name: "c", BaseURL: "http://c", Token: "c", Weight: 1, Enabled: boolPtr(true)},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 10, Enabled: boolPtr(true)},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true)},
+		{Name: "c", BaseURL: "http://c", Tokens: config.TokenList{"c"}, Weight: 1, Enabled: boolPtr(true)},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -233,9 +233,9 @@ func TestWeightedRoundRobin_NextForModelNoMatchDoesNotBias(t *testing.T) {
 	// Without fix, interleaving NextForModel("none") before each NextForModel("m2")
 	// would result in b:100 c:0 instead of b:50 c:50.
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 10, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m2"}},
-		{Name: "c", BaseURL: "http://c", Token: "c", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m2"}},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 10, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"m1"}},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"m2"}},
+		{Name: "c", BaseURL: "http://c", Tokens: config.TokenList{"c"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"m2"}},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -261,7 +261,7 @@ func TestWeightedRoundRobin_NextForModelNoMatchDoesNotBias(t *testing.T) {
 func TestWeightedRoundRobin_ZeroWeightNoPanic(t *testing.T) {
 	// Regression: zero-weight upstream should not cause division-by-zero panic.
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 0, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 0, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"m1"}},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -290,12 +290,12 @@ func TestWeightedRoundRobin_ZeroWeightNoPanic(t *testing.T) {
 func TestWeightedRoundRobin_UpdateZeroWeightNoPanic(t *testing.T) {
 	// Regression: Update with zero-weight upstream should not cause panic.
 	wrr := NewWeightedRoundRobin([]config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true)},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 1, Enabled: boolPtr(true)},
 	})
 
 	wrr.Update([]config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 0, Enabled: boolPtr(true)},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 0, Enabled: boolPtr(true)},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 0, Enabled: boolPtr(true)},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 0, Enabled: boolPtr(true)},
 	})
 
 	// Should not panic, and should return upstreams (treated as weight 1)
@@ -309,8 +309,8 @@ func TestWeightedRoundRobin_UpdateZeroWeightNoPanic(t *testing.T) {
 
 func TestWeightedRoundRobin_UpdatePreservesPerModelState(t *testing.T) {
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1", "m2"}},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1", "m2"}},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"m1", "m2"}},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"m1", "m2"}},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -344,8 +344,8 @@ func TestWeightedRoundRobin_UpdatePreservesPerModelState(t *testing.T) {
 
 func TestWeightedRoundRobin_UpdateRemovesStateForRemovedUpstream(t *testing.T) {
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"m1"}},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"m1"}},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -358,7 +358,7 @@ func TestWeightedRoundRobin_UpdateRemovesStateForRemovedUpstream(t *testing.T) {
 
 	// Update removing 'a', keeping 'b'
 	wrr.Update([]config.Upstream{
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"m1"}},
 	})
 
 	// 'b' state should be preserved (still unavailable)
@@ -368,8 +368,8 @@ func TestWeightedRoundRobin_UpdateRemovesStateForRemovedUpstream(t *testing.T) {
 
 	// Re-add 'a' — should start fresh (available)
 	wrr.Update([]config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
-		{Name: "b", BaseURL: "http://b", Token: "b", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"m1"}},
+		{Name: "b", BaseURL: "http://b", Tokens: config.TokenList{"b"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"m1"}},
 	})
 
 	if !wrr.IsAvailable("a", "m1") {
@@ -382,7 +382,7 @@ func TestWeightedRoundRobin_UpdateRemovesStateForRemovedUpstream(t *testing.T) {
 
 func TestWeightedRoundRobin_UpdateClearsStateWhenAllDisabled(t *testing.T) {
 	upstreams := []config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(true), AvailableModels: []string{"m1"}},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 1, Enabled: boolPtr(true), AvailableModels: config.AvailableModelList{"m1"}},
 	}
 
 	wrr := NewWeightedRoundRobin(upstreams)
@@ -394,7 +394,7 @@ func TestWeightedRoundRobin_UpdateClearsStateWhenAllDisabled(t *testing.T) {
 
 	// Update with all disabled — should clear states
 	wrr.Update([]config.Upstream{
-		{Name: "a", BaseURL: "http://a", Token: "a", Weight: 1, Enabled: boolPtr(false), AvailableModels: []string{"m1"}},
+		{Name: "a", BaseURL: "http://a", Tokens: config.TokenList{"a"}, Weight: 1, Enabled: boolPtr(false), AvailableModels: config.AvailableModelList{"m1"}},
 	})
 
 	// Re-enable 'a' — should start fresh

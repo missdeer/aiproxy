@@ -101,7 +101,7 @@ func TestDoHTTPRequest_RequestBodyCompressionFromUpstreamConfig(t *testing.T) {
 			upstream := config.Upstream{
 				Name:               "test-upstream",
 				BaseURL:            upstreamSrv.URL,
-				Token:              "test-token",
+				Tokens:             config.TokenList{"test-token"},
 				RequestCompression: tt.requestCompression,
 			}
 
@@ -165,7 +165,7 @@ func TestDoHTTPRequestStream_RequestBodyCompressionFromUpstreamConfig(t *testing
 			upstream := config.Upstream{
 				Name:               "test-upstream",
 				BaseURL:            upstreamSrv.URL,
-				Token:              "test-token",
+				Tokens:             config.TokenList{"test-token"},
 				RequestCompression: tt.requestCompression,
 			}
 

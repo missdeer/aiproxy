@@ -92,7 +92,7 @@ func TestDoHTTPRequestStream_ReturnsUnreadBody(t *testing.T) {
 	defer upstream.Close()
 
 	originalReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	u := config.Upstream{BaseURL: upstream.URL, Token: "test-token", APIType: config.APITypeOpenAI}
+	u := config.Upstream{BaseURL: upstream.URL, Tokens: config.TokenList{"test-token"}, APIType: config.APITypeOpenAI}
 
 	resp, err := doHTTPRequestStream(upstream.Client(), upstream.URL, []byte(`{}`), u, config.APITypeOpenAI, originalReq, "")
 	if err != nil {
@@ -124,7 +124,7 @@ func TestDoHTTPRequestStream_SetsAuthHeaders(t *testing.T) {
 	defer upstream.Close()
 
 	originalReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	u := config.Upstream{BaseURL: upstream.URL, Token: "sk-test-123", APIType: config.APITypeOpenAI}
+	u := config.Upstream{BaseURL: upstream.URL, Tokens: config.TokenList{"sk-test-123"}, APIType: config.APITypeOpenAI}
 
 	resp, err := doHTTPRequestStream(upstream.Client(), upstream.URL, []byte(`{}`), u, config.APITypeOpenAI, originalReq, "")
 	if err != nil {
@@ -146,7 +146,7 @@ func TestDoHTTPRequestStream_ErrorStatus(t *testing.T) {
 	defer upstream.Close()
 
 	originalReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	u := config.Upstream{BaseURL: upstream.URL, Token: "test", APIType: config.APITypeOpenAI}
+	u := config.Upstream{BaseURL: upstream.URL, Tokens: config.TokenList{"test"}, APIType: config.APITypeOpenAI}
 
 	resp, err := doHTTPRequestStream(upstream.Client(), upstream.URL, []byte(`{}`), u, config.APITypeOpenAI, originalReq, "")
 	if err != nil {
@@ -185,7 +185,7 @@ func TestDoHTTPRequestStream_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	originalReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	originalReq = originalReq.WithContext(ctx)
-	u := config.Upstream{BaseURL: upstream.URL, Token: "test", APIType: config.APITypeOpenAI}
+	u := config.Upstream{BaseURL: upstream.URL, Tokens: config.TokenList{"test"}, APIType: config.APITypeOpenAI}
 
 	resp, err := doHTTPRequestStream(upstream.Client(), upstream.URL, []byte(`{}`), u, config.APITypeOpenAI, originalReq, "")
 	if err != nil {
@@ -263,8 +263,8 @@ func TestStreamingPassthrough_OpenAI(t *testing.T) {
 
 	cfg := &config.Config{
 		Upstreams: []config.Upstream{{
-			Name: "test-openai", BaseURL: upstream.URL, Token: "test-token",
-			Weight: 1, APIType: config.APITypeOpenAI, AvailableModels: []string{"gpt-4o-mini"},
+			Name: "test-openai", BaseURL: upstream.URL, Tokens: config.TokenList{"test-token"},
+			Weight: 1, APIType: config.APITypeOpenAI, AvailableModels: config.AvailableModelList{"gpt-4o-mini"},
 		}},
 	}
 	handler := NewOpenAIHandler(cfg)
@@ -346,10 +346,10 @@ func TestStreamingPassthrough_BalancerRecording(t *testing.T) {
 		{
 			Name:            "test-upstream",
 			BaseURL:         upstream.URL,
-			Token:           "test",
+			Tokens:          config.TokenList{"test"},
 			Weight:          1,
 			APIType:         config.APITypeOpenAI,
-			AvailableModels: []string{"gpt-4o-mini"},
+			AvailableModels: config.AvailableModelList{"gpt-4o-mini"},
 		},
 	}
 	bal := balancer.NewWeightedRoundRobin(upstreams)
@@ -415,10 +415,10 @@ func TestStreamingPassthrough_ClientDisconnect_NoBalancerRecord(t *testing.T) {
 		{
 			Name:            "test-upstream",
 			BaseURL:         upstream.URL,
-			Token:           "test",
+			Tokens:          config.TokenList{"test"},
 			Weight:          1,
 			APIType:         config.APITypeOpenAI,
-			AvailableModels: []string{"gpt-4o-mini"},
+			AvailableModels: config.AvailableModelList{"gpt-4o-mini"},
 		},
 	}
 	bal := balancer.NewWeightedRoundRobin(upstreams)
@@ -499,10 +499,10 @@ func TestStreamingPassthrough_NonStreamingUnchanged(t *testing.T) {
 			{
 				Name:            "test-openai",
 				BaseURL:         upstream.URL,
-				Token:           "test-token",
+				Tokens:          config.TokenList{"test-token"},
 				Weight:          1,
 				APIType:         config.APITypeOpenAI,
-				AvailableModels: []string{"gpt-4o-mini"},
+				AvailableModels: config.AvailableModelList{"gpt-4o-mini"},
 			},
 		},
 	}
@@ -707,7 +707,7 @@ func testStreamingFastPathE2E(t *testing.T, label string, respFormat config.APIT
 	// Simulate the handler's fast path: SendStream → HandleStreamResponse → PipeStream
 	originalReq := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader("{}"))
 	resp, err := doHTTPRequestStream(upstream.Client(), upstream.URL, []byte(`{}`),
-		config.Upstream{Token: "test"}, respFormat, originalReq, "")
+		config.Upstream{Tokens: config.TokenList{"test"}}, respFormat, originalReq, "")
 	if err != nil {
 		t.Fatalf("[%s] doHTTPRequestStream error: %v", label, err)
 	}
@@ -917,3 +917,109 @@ func (w *failingWriter) Header() http.Header {
 }
 
 func (w *failingWriter) WriteHeader(int) {}
+
+func TestDoHTTPRequest_MultiTokenFailover(t *testing.T) {
+	var tokensSeen []string
+	var mu sync.Mutex
+	callCount := 0
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		tok := r.Header.Get("Authorization")
+		tokensSeen = append(tokensSeen, tok)
+		callCount++
+		n := callCount
+		mu.Unlock()
+
+		if n <= 2 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":"rate limited"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	originalReq := httptest.NewRequest(http.MethodPost, "/test", nil)
+	u := config.Upstream{
+		Name:    "multi-token-test",
+		BaseURL: upstream.URL,
+		Tokens:  config.TokenList{"bad-1", "bad-2", "good-3"},
+		APIType: config.APITypeOpenAI,
+	}
+
+	status, body, _, err := doHTTPRequest(upstream.Client(), upstream.URL, []byte(`{}`), u, config.APITypeOpenAI, originalReq, "")
+	if err != nil {
+		t.Fatalf("doHTTPRequest error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", status, body)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(tokensSeen) != 3 {
+		t.Fatalf("expected 3 attempts, got %d", len(tokensSeen))
+	}
+}
+
+func TestDoHTTPRequest_SingleToken(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "sk-single" {
+			t.Errorf("x-api-key = %q, want %q", r.Header.Get("x-api-key"), "sk-single")
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	originalReq := httptest.NewRequest(http.MethodPost, "/test", nil)
+	u := config.Upstream{
+		Name:    "single-token-test",
+		BaseURL: upstream.URL,
+		Tokens:  config.TokenList{"sk-single"},
+		APIType: config.APITypeAnthropic,
+	}
+
+	status, _, _, err := doHTTPRequest(upstream.Client(), upstream.URL, []byte(`{}`), u, config.APITypeAnthropic, originalReq, "")
+	if err != nil {
+		t.Fatalf("doHTTPRequest error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+}
+
+func TestDoHTTPRequestStream_MultiTokenFailover(t *testing.T) {
+	callCount := int32(0)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&callCount, 1)
+		if n == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte(`error`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`data: {"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	originalReq := httptest.NewRequest(http.MethodPost, "/test", nil)
+	u := config.Upstream{
+		Name:    "stream-failover",
+		BaseURL: upstream.URL,
+		Tokens:  config.TokenList{"tok-fail", "tok-ok"},
+		APIType: config.APITypeOpenAI,
+	}
+
+	resp, err := doHTTPRequestStream(upstream.Client(), upstream.URL, []byte(`{}`), u, config.APITypeOpenAI, originalReq, "")
+	if err != nil {
+		t.Fatalf("doHTTPRequestStream error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}

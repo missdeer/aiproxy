@@ -50,7 +50,7 @@ func TestForwardToCodex_RequestCompression(t *testing.T) {
 
 	upstream := config.Upstream{
 		Name:               "test-codex",
-		AuthFiles:          []string{authFile},
+		AuthFiles:          config.AuthFileList{authFile},
 		RequestCompression: "gzip",
 	}
 	_, _, _, err := ForwardToCodex(client, upstream, []byte(`{"input":"`+strings.Repeat("hello-", 300)+`","model":"codex-mini-latest"}`), true)
@@ -105,7 +105,7 @@ func TestForwardToClaudeCode_RequestCompression(t *testing.T) {
 
 	upstream := config.Upstream{
 		Name:               "test-claudecode",
-		AuthFiles:          []string{authFile},
+		AuthFiles:          config.AuthFileList{authFile},
 		RequestCompression: "gzip",
 	}
 	requestBody := []byte(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"` + strings.Repeat("hello-", 300) + `"}]}`)
@@ -165,7 +165,7 @@ func TestForwardToGeminiCLI_RequestCompression(t *testing.T) {
 
 	upstream := config.Upstream{
 		Name:               "test-geminicli",
-		AuthFiles:          []string{authFile},
+		AuthFiles:          config.AuthFileList{authFile},
 		RequestCompression: "gzip",
 	}
 	_, _, _, err := ForwardToGeminiCLI(client, upstream, []byte(`{"input":"`+strings.Repeat("hello-", 300)+`","model":"gemini-3-pro-preview"}`), true)
@@ -221,7 +221,7 @@ func TestForwardToAntigravity_RequestCompression(t *testing.T) {
 
 	upstream := config.Upstream{
 		Name:               "test-antigravity",
-		AuthFiles:          []string{authFile},
+		AuthFiles:          config.AuthFileList{authFile},
 		RequestCompression: "gzip",
 	}
 	_, _, _, err := ForwardToAntigravity(client, upstream, []byte(`{"input":"`+strings.Repeat("hello-", 300)+`","model":"gemini-2.5-flash"}`), true)

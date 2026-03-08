@@ -140,7 +140,7 @@ func TestUpstreamMapModelNilMappings(t *testing.T) {
 func TestUpstreamSupportsModel(t *testing.T) {
 	tests := []struct {
 		name            string
-		availableModels []string
+		availableModels AvailableModelList
 		model           string
 		want            bool
 	}{
@@ -152,13 +152,13 @@ func TestUpstreamSupportsModel(t *testing.T) {
 		},
 		{
 			name:            "model in list",
-			availableModels: []string{"gpt-4", "gpt-3.5"},
+			availableModels: AvailableModelList{"gpt-4", "gpt-3.5"},
 			model:           "gpt-4",
 			want:            true,
 		},
 		{
 			name:            "model not in list",
-			availableModels: []string{"gpt-4", "gpt-3.5"},
+			availableModels: AvailableModelList{"gpt-4", "gpt-3.5"},
 			model:           "claude-3",
 			want:            false,
 		},
@@ -876,4 +876,202 @@ model_fallback:
 			t.Fatalf("Load() err = %v, want empty source validation error", err)
 		}
 	})
+}
+
+func TestTokenListScalar(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "config.yaml")
+	os.WriteFile(p, []byte(`
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token: "sk-single"
+`), 0644)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Upstreams[0].Tokens) != 1 || cfg.Upstreams[0].Tokens[0] != "sk-single" {
+		t.Fatalf("Tokens = %v, want [sk-single]", cfg.Upstreams[0].Tokens)
+	}
+}
+
+func TestAuthFileListScalar(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "config.yaml")
+	os.WriteFile(p, []byte(`
+upstreams:
+  - name: "test"
+    api_type: "codex"
+    auth_files: "/path/to/auth.json"
+`), 0644)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Upstreams[0].AuthFiles) != 1 || cfg.Upstreams[0].AuthFiles[0] != "/path/to/auth.json" {
+		t.Fatalf("AuthFiles = %v, want [/path/to/auth.json]", cfg.Upstreams[0].AuthFiles)
+	}
+}
+
+func TestAvailableModelListScalar(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "config.yaml")
+	os.WriteFile(p, []byte(`
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+    available_models: "gpt-4o"
+`), 0644)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Upstreams[0].SupportsModel("gpt-4o") {
+		t.Fatal("expected scalar available_models to support gpt-4o")
+	}
+}
+
+func TestStringOrSliceRejectsNonStringScalar(t *testing.T) {
+	tmpDir := t.TempDir()
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "auth_files numeric",
+			body: "upstreams:\n  - name: \"test\"\n    api_type: \"codex\"\n    auth_files: 123\n",
+		},
+		{
+			name: "available_models numeric",
+			body: "upstreams:\n  - name: \"test\"\n    base_url: \"https://api.example.com\"\n    token: \"sk-test\"\n    available_models: 123\n",
+		},
+		{
+			name: "token boolean",
+			body: "upstreams:\n  - name: \"test\"\n    base_url: \"https://api.example.com\"\n    token: true\n",
+		},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := filepath.Join(tmpDir, fmt.Sprintf("bad_%d.yaml", i))
+			os.WriteFile(p, []byte(tt.body), 0644)
+			_, err := Load(p)
+			if err == nil {
+				t.Fatal("expected error for non-string scalar")
+			}
+		})
+	}
+}
+
+func TestTokenListSequence(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "config.yaml")
+	os.WriteFile(p, []byte(`
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token:
+      - "sk-a"
+      - "sk-b"
+      - "sk-c"
+`), 0644)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"sk-a", "sk-b", "sk-c"}
+	if len(cfg.Upstreams[0].Tokens) != len(want) {
+		t.Fatalf("Tokens count = %d, want %d", len(cfg.Upstreams[0].Tokens), len(want))
+	}
+	for i, w := range want {
+		if cfg.Upstreams[0].Tokens[i] != w {
+			t.Errorf("Tokens[%d] = %q, want %q", i, cfg.Upstreams[0].Tokens[i], w)
+		}
+	}
+}
+
+func TestTokenListDedup(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "config.yaml")
+	os.WriteFile(p, []byte(`
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token:
+      - "sk-a"
+      - "sk-b"
+      - "sk-a"
+`), 0644)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"sk-a", "sk-b"}
+	if len(cfg.Upstreams[0].Tokens) != len(want) {
+		t.Fatalf("Tokens count = %d, want %d", len(cfg.Upstreams[0].Tokens), len(want))
+	}
+	for i, w := range want {
+		if cfg.Upstreams[0].Tokens[i] != w {
+			t.Errorf("Tokens[%d] = %q, want %q", i, cfg.Upstreams[0].Tokens[i], w)
+		}
+	}
+}
+
+func TestTokenListEmptyFilter(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "config.yaml")
+	os.WriteFile(p, []byte(`
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token:
+      - "sk-valid"
+      - "  "
+      - ""
+      - "sk-also-valid"
+`), 0644)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"sk-valid", "sk-also-valid"}
+	if len(cfg.Upstreams[0].Tokens) != len(want) {
+		t.Fatalf("Tokens count = %d, want %d", len(cfg.Upstreams[0].Tokens), len(want))
+	}
+}
+
+func TestTokenRoundRobin(t *testing.T) {
+	u := Upstream{
+		Name:   "rr-test",
+		Tokens: TokenList{"t1", "t2", "t3"},
+	}
+	seen := make(map[string]int)
+	for i := 0; i < 9; i++ {
+		tok := u.NextToken()
+		seen[tok]++
+	}
+	for _, tok := range u.Tokens {
+		if seen[tok] != 3 {
+			t.Errorf("token %q seen %d times, want 3", tok, seen[tok])
+		}
+	}
+}
+
+func TestTokenMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "config.yaml")
+	os.WriteFile(p, []byte(`
+upstreams:
+  - name: "no-token"
+    base_url: "https://api.example.com"
+    api_type: "anthropic"
+`), 0644)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected error for missing token")
+	}
+	if !strings.Contains(err.Error(), "token") {
+		t.Fatalf("error = %v, want token-related error", err)
+	}
 }

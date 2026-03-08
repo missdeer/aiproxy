@@ -62,7 +62,7 @@ See `config.example.yaml` for full example. Key fields:
 - `upstream_request_timeout`: Seconds to wait for upstream response headers (default `60`)
 - `upstreams`: List of upstream services, each with:
   - `base_url`: Upstream API endpoint
-  - `token`: Authentication token (API key-based upstreams)
+  - `token`: Authentication token or list of tokens (API key-based upstreams, round-robin with failover)
   - `auth_files`: OAuth auth file paths (OAuth-based upstreams, round-robin)
   - `weight`: Load balancing weight
   - `api_type`: Protocol type (`anthropic`, `openai`, `gemini`, `responses`, `codex`, `geminicli`, `antigravity`, `claudecode`, `kiro`)
@@ -77,6 +77,7 @@ See `config.example.yaml` for full example. Key fields:
 - **Circuit breaker**: Upstream marked unavailable after 3 consecutive failures per model, auto-recovers after 30 minutes
 - **OAuth authentication**: Support for OAuth-based upstreams with automatic token refresh
 - **Auth file round-robin**: Multiple auth files per upstream, rotated in round-robin fashion
+- **Token round-robin**: Multiple API tokens per upstream with round-robin rotation and failover on 4xx/5xx
 - **Streaming support**: Full SSE streaming support across all protocols
 - **Config hot-reload**: Config file changes are watched and applied without restart
 - **Rotating file logging**: Optional file-based logging with automatic rotation by size/age

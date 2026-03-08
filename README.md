@@ -16,6 +16,7 @@ Accepts requests in **Anthropic**, **OpenAI**, **Responses API**, or **Gemini** 
 - **Model Fallback Chain** — When all upstreams for a model are exhausted, automatically retry with a configured fallback model (e.g., `claude-opus-4-6` → `claude-opus-4-5` → `claude-sonnet-4-5`)
 - **OAuth Authentication** — Support for OAuth-based upstreams (Codex, Gemini CLI, Antigravity, Claude Code) with automatic token refresh
 - **Auth File Round-Robin** — Multiple auth files per upstream, rotated in round-robin fashion
+- **Token Round-Robin** — Multiple API tokens per upstream with round-robin rotation and automatic failover
 - **Streaming Support** — Full support for streaming responses across all protocols
 - **Upstream Must-Stream Fallback** — Force streaming-only upstreams while keeping non-stream client compatibility
 - **Outbound Request Compression** — Upstream request bodies use configurable `request_compression` (`zstd` default, `gzip`/`br`/`none` supported)
@@ -63,7 +64,7 @@ log:
 
 # Upstream services
 upstreams:
-  # API key-based upstream
+  # API key-based upstream (single token)
   - name: "primary"
     base_url: "https://api.anthropic.com"
     token: "sk-ant-xxx"
@@ -76,6 +77,15 @@ upstreams:
     available_models:
       - "claude-3-opus"
       - "claude-3-sonnet"
+
+  # API key-based upstream (multiple tokens, round-robin with failover)
+  - name: "secondary"
+    base_url: "https://api.anthropic.com"
+    token:
+      - "sk-ant-key1"
+      - "sk-ant-key2"
+    weight: 5
+    api_type: "anthropic"
 
   # OAuth-based upstream (Gemini CLI / Antigravity / Codex / Claude Code / Kiro)
   - name: "Gemini CLI"
