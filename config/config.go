@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -236,6 +237,21 @@ func Load(path string) (*Config, error) {
 				}
 			}
 			cfg.Upstreams[i].AuthFiles = unique
+		}
+		if len(cfg.Upstreams[i].HTTPHeaders) > 0 {
+			canonical := make(map[string]string, len(cfg.Upstreams[i].HTTPHeaders))
+			for k, v := range cfg.Upstreams[i].HTTPHeaders {
+				trimmed := strings.TrimSpace(k)
+				if trimmed == "" {
+					return nil, fmt.Errorf("upstream #%d %q: http_headers contains an empty key", i+1, cfg.Upstreams[i].Name)
+				}
+				ck := http.CanonicalHeaderKey(trimmed)
+				if _, dup := canonical[ck]; dup {
+					return nil, fmt.Errorf("upstream #%d %q: duplicate http_headers key %q (case-insensitive)", i+1, cfg.Upstreams[i].Name, k)
+				}
+				canonical[ck] = v
+			}
+			cfg.Upstreams[i].HTTPHeaders = canonical
 		}
 	}
 

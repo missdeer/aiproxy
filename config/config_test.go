@@ -678,8 +678,8 @@ upstreams:
     base_url: "https://api.example.com"
     token: "sk-test"
     http_headers:
-      "X-Custom": "value1"
-      "Authorization": "Bearer override"
+      "x-custom": "value1"
+      "authorization": "Bearer override"
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatal(err)
@@ -718,6 +718,47 @@ upstreams:
 	}
 	if cfg.Upstreams[0].HTTPHeaders != nil {
 		t.Errorf("HTTPHeaders = %v, want nil", cfg.Upstreams[0].HTTPHeaders)
+	}
+}
+
+func TestLoadHTTPHeadersCaseDuplicate(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+    http_headers:
+      "X-Custom": "value1"
+      "x-custom": "value2"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(configPath)
+	if err == nil || !strings.Contains(err.Error(), "duplicate http_headers key") {
+		t.Fatalf("expected duplicate http_headers error, got %v", err)
+	}
+}
+
+func TestLoadHTTPHeadersEmptyKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token: "sk-test"
+    http_headers:
+      "   ": "value1"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(configPath)
+	if err == nil || !strings.Contains(err.Error(), "empty key") {
+		t.Fatalf("expected empty key error, got %v", err)
 	}
 }
 
