@@ -656,3 +656,284 @@ func TestConvertStreamToAnthropic_FromGeminiWrapped(t *testing.T) {
 		t.Fatalf("content text = %#v, want %q", first["text"], "Hello world")
 	}
 }
+
+func TestConvertAnthropicToResponsesRequest_TextOnly(t *testing.T) {
+	req := map[string]any{
+		"model":      "claude-3",
+		"max_tokens": 1000,
+		"system":     "You are helpful",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "Hello"},
+			map[string]any{"role": "assistant", "content": "Hi there"},
+		},
+	}
+
+	result := convertAnthropicToResponsesRequest(req)
+
+	if result["model"] != "claude-3" {
+		t.Fatalf("model = %v, want claude-3", result["model"])
+	}
+	if result["instructions"] != "You are helpful" {
+		t.Fatalf("instructions = %v, want 'You are helpful'", result["instructions"])
+	}
+
+	input, ok := result["input"].([]any)
+	if !ok {
+		t.Fatalf("input is not []any: %T", result["input"])
+	}
+	if len(input) != 2 {
+		t.Fatalf("input count = %d, want 2", len(input))
+	}
+	msg0 := input[0].(map[string]any)
+	if msg0["role"] != "user" || msg0["content"] != "Hello" {
+		t.Fatalf("input[0] = %v, want user/Hello", msg0)
+	}
+}
+
+func TestConvertAnthropicToResponsesRequest_ToolUse(t *testing.T) {
+	req := map[string]any{
+		"model":      "claude-3",
+		"max_tokens": 1000,
+		"messages": []any{
+			map[string]any{"role": "user", "content": "Read file.txt"},
+			map[string]any{
+				"role": "assistant",
+				"content": []any{
+					map[string]any{
+						"type": "text",
+						"text": "I'll read that file.",
+					},
+					map[string]any{
+						"type":  "tool_use",
+						"id":    "tool_abc",
+						"name":  "read_file",
+						"input": map[string]any{"path": "file.txt"},
+					},
+				},
+			},
+		},
+	}
+
+	result := convertAnthropicToResponsesRequest(req)
+	input, ok := result["input"].([]any)
+	if !ok {
+		t.Fatalf("input is not []any: %T", result["input"])
+	}
+
+	// Should produce: user message, text message (from assistant), function_call
+	if len(input) != 3 {
+		t.Fatalf("input count = %d, want 3", len(input))
+	}
+
+	// First: user message
+	msg0 := input[0].(map[string]any)
+	if msg0["role"] != "user" {
+		t.Fatalf("input[0] role = %v, want user", msg0["role"])
+	}
+
+	// Second: assistant text (flushed before tool_use)
+	msg1 := input[1].(map[string]any)
+	if msg1["role"] != "assistant" || msg1["content"] != "I'll read that file." {
+		t.Fatalf("input[1] = %v, want assistant text", msg1)
+	}
+
+	// Third: function_call
+	fc := input[2].(map[string]any)
+	if fc["type"] != "function_call" {
+		t.Fatalf("input[2] type = %v, want function_call", fc["type"])
+	}
+	if fc["call_id"] != "tool_abc" {
+		t.Fatalf("call_id = %v, want tool_abc", fc["call_id"])
+	}
+	if fc["name"] != "read_file" {
+		t.Fatalf("name = %v, want read_file", fc["name"])
+	}
+	// arguments should be a JSON string
+	args, ok := fc["arguments"].(string)
+	if !ok {
+		t.Fatalf("arguments is not string: %T", fc["arguments"])
+	}
+	if !strings.Contains(args, "file.txt") {
+		t.Fatalf("arguments = %q, want to contain file.txt", args)
+	}
+}
+
+func TestConvertAnthropicToResponsesRequest_ToolResult(t *testing.T) {
+	req := map[string]any{
+		"model":      "claude-3",
+		"max_tokens": 1000,
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":        "tool_result",
+						"tool_use_id": "tool_abc",
+						"content":     "file contents here",
+					},
+				},
+			},
+		},
+	}
+
+	result := convertAnthropicToResponsesRequest(req)
+	input, ok := result["input"].([]any)
+	if !ok {
+		t.Fatalf("input is not []any: %T", result["input"])
+	}
+
+	if len(input) != 1 {
+		t.Fatalf("input count = %d, want 1", len(input))
+	}
+
+	fco := input[0].(map[string]any)
+	if fco["type"] != "function_call_output" {
+		t.Fatalf("type = %v, want function_call_output", fco["type"])
+	}
+	if fco["call_id"] != "tool_abc" {
+		t.Fatalf("call_id = %v, want tool_abc", fco["call_id"])
+	}
+	if fco["output"] != "file contents here" {
+		t.Fatalf("output = %v, want 'file contents here'", fco["output"])
+	}
+}
+
+func TestConvertAnthropicToResponsesRequest_ToolResultNotDropped(t *testing.T) {
+	// This is the exact scenario that caused the original bug:
+	// a user message with only tool_result content should NOT produce
+	// an empty user message.
+	req := map[string]any{
+		"model":      "claude-3",
+		"max_tokens": 1000,
+		"messages": []any{
+			map[string]any{"role": "user", "content": "Help me"},
+			map[string]any{
+				"role": "assistant",
+				"content": []any{
+					map[string]any{
+						"type":  "tool_use",
+						"id":    "tool_1",
+						"name":  "bash",
+						"input": map[string]any{"command": "ls"},
+					},
+				},
+			},
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":        "tool_result",
+						"tool_use_id": "tool_1",
+						"content":     "file1.txt\nfile2.txt",
+					},
+				},
+			},
+		},
+	}
+
+	result := convertAnthropicToResponsesRequest(req)
+	input, ok := result["input"].([]any)
+	if !ok {
+		t.Fatalf("input is not []any: %T", result["input"])
+	}
+
+	// Verify no empty-content user messages exist
+	for i, item := range input {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if role, _ := itemMap["role"].(string); role == "user" {
+			if content, ok := itemMap["content"].(string); ok && content == "" {
+				t.Fatalf("input[%d] is an empty user message — this would be rejected by Anthropic API", i)
+			}
+		}
+	}
+
+	// Third item should be function_call_output, not an empty user message
+	if len(input) < 3 {
+		t.Fatalf("input count = %d, want at least 3", len(input))
+	}
+	fco := input[2].(map[string]any)
+	if fco["type"] != "function_call_output" {
+		t.Fatalf("input[2] type = %v, want function_call_output", fco["type"])
+	}
+}
+
+func TestConvertAnthropicToResponsesRequest_RoundTrip(t *testing.T) {
+	// Verify that Anthropic → Responses → Anthropic preserves tool_use/tool_result
+	anthropicReq := map[string]any{
+		"model":      "claude-3",
+		"max_tokens": 1000,
+		"system":     "Be helpful",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "Read a file"},
+			map[string]any{
+				"role": "assistant",
+				"content": []any{
+					map[string]any{
+						"type":  "tool_use",
+						"id":    "call_123",
+						"name":  "read_file",
+						"input": map[string]any{"path": "/tmp/test.txt"},
+					},
+				},
+			},
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":        "tool_result",
+						"tool_use_id": "call_123",
+						"content":     "hello world",
+					},
+				},
+			},
+		},
+	}
+
+	// Forward: Anthropic → Responses
+	responsesReq := convertAnthropicToResponsesRequest(anthropicReq)
+
+	// Reverse: Responses → Anthropic
+	anthropicResult := convertResponsesToAnthropicRequest(responsesReq)
+
+	msgs, ok := anthropicResult["messages"].([]map[string]any)
+	if !ok {
+		t.Fatalf("messages is not []map[string]any: %T", anthropicResult["messages"])
+	}
+
+	// Should have 3 messages: user, assistant(tool_use), user(tool_result)
+	if len(msgs) != 3 {
+		t.Fatalf("round-trip messages count = %d, want 3", len(msgs))
+	}
+
+	// First message: user text
+	if msgs[0]["role"] != "user" {
+		t.Fatalf("msgs[0] role = %v, want user", msgs[0]["role"])
+	}
+
+	// Second message: assistant with tool_use
+	if msgs[1]["role"] != "assistant" {
+		t.Fatalf("msgs[1] role = %v, want assistant", msgs[1]["role"])
+	}
+	content1, ok := msgs[1]["content"].([]map[string]any)
+	if !ok || len(content1) == 0 {
+		t.Fatalf("msgs[1] content is not array of blocks: %T", msgs[1]["content"])
+	}
+	if content1[0]["type"] != "tool_use" {
+		t.Fatalf("msgs[1] content[0] type = %v, want tool_use", content1[0]["type"])
+	}
+
+	// Third message: user with tool_result
+	if msgs[2]["role"] != "user" {
+		t.Fatalf("msgs[2] role = %v, want user", msgs[2]["role"])
+	}
+	content2, ok := msgs[2]["content"].([]map[string]any)
+	if !ok || len(content2) == 0 {
+		t.Fatalf("msgs[2] content is not array of blocks: %T", msgs[2]["content"])
+	}
+	if content2[0]["type"] != "tool_result" {
+		t.Fatalf("msgs[2] content[0] type = %v, want tool_result", content2[0]["type"])
+	}
+}

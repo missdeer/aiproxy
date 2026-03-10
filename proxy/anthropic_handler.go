@@ -320,6 +320,29 @@ func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string
 		return status, respBody, headers, nil, nil
 	}
 
+	// Claude Code - direct passthrough (same Anthropic Messages format, different auth)
+	if apiType == config.APITypeClaudeCode {
+		modifiedBody, err := json.Marshal(bodyMap)
+		if err != nil {
+			return 0, nil, nil, nil, err
+		}
+		ctx := originalReq.Context()
+
+		if clientWantsStream {
+			resp, err := ForwardToClaudeCodeStream(h.client, upstream, modifiedBody, ctx)
+			if err != nil {
+				return 0, nil, nil, nil, err
+			}
+			return HandleStreamResponse(resp)
+		}
+
+		status, respBody, headers, err := ForwardToClaudeCodeWithContext(h.client, upstream, modifiedBody, ctx, false)
+		if err != nil {
+			return 0, nil, nil, nil, err
+		}
+		return status, respBody, headers, nil, nil
+	}
+
 	// Convert Anthropic request to canonical (Responses) format
 	canonicalBody := convertAnthropicToResponsesRequest(bodyMap)
 	canonicalBody["model"] = model

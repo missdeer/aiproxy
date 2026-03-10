@@ -261,30 +261,108 @@ func convertAnthropicToResponsesRequest(req map[string]any) map[string]any {
 	}
 
 	// Convert messages to input
-	var input []map[string]any
+	var input []any
 	if anthropicMessages, ok := req["messages"].([]any); ok {
 		for _, msg := range anthropicMessages {
-			if msgMap, ok := msg.(map[string]any); ok {
-				role, _ := msgMap["role"].(string)
-				content := msgMap["content"]
+			msgMap, ok := msg.(map[string]any)
+			if !ok {
+				continue
+			}
+			role, _ := msgMap["role"].(string)
+			content := msgMap["content"]
 
-				var contentStr string
-				switch c := content.(type) {
-				case string:
-					contentStr = c
-				case []any:
-					for _, block := range c {
-						if blockMap, ok := block.(map[string]any); ok {
-							if text, ok := blockMap["text"].(string); ok {
-								contentStr += text
+			switch c := content.(type) {
+			case string:
+				input = append(input, map[string]any{
+					"role":    role,
+					"content": c,
+				})
+			case []any:
+				// Process content blocks: text, tool_use, tool_result
+				var textParts []string
+				for _, block := range c {
+					blockMap, ok := block.(map[string]any)
+					if !ok {
+						continue
+					}
+					blockType, _ := blockMap["type"].(string)
+
+					switch blockType {
+					case "tool_use":
+						// Flush accumulated text first
+						if len(textParts) > 0 {
+							input = append(input, map[string]any{
+								"role":    role,
+								"content": strings.Join(textParts, ""),
+							})
+							textParts = nil
+						}
+						// Convert tool_use to function_call
+						id, _ := blockMap["id"].(string)
+						name, _ := blockMap["name"].(string)
+						inputObj := blockMap["input"]
+						// Serialize input to JSON string for Responses format
+						argStr := "{}"
+						if inputObj != nil {
+							if argBytes, err := json.Marshal(inputObj); err == nil {
+								argStr = string(argBytes)
 							}
+						}
+						input = append(input, map[string]any{
+							"type":      "function_call",
+							"call_id":   id,
+							"name":      name,
+							"arguments": argStr,
+						})
+
+					case "tool_result":
+						// Flush accumulated text first
+						if len(textParts) > 0 {
+							input = append(input, map[string]any{
+								"role":    role,
+								"content": strings.Join(textParts, ""),
+							})
+							textParts = nil
+						}
+						// Convert tool_result to function_call_output
+						toolUseID, _ := blockMap["tool_use_id"].(string)
+						output := ""
+						if s, ok := blockMap["content"].(string); ok {
+							output = s
+						} else if blockMap["content"] != nil {
+							if outBytes, err := json.Marshal(blockMap["content"]); err == nil {
+								output = string(outBytes)
+							}
+						}
+						input = append(input, map[string]any{
+							"type":    "function_call_output",
+							"call_id": toolUseID,
+							"output":  output,
+						})
+
+					case "text":
+						if text, ok := blockMap["text"].(string); ok {
+							textParts = append(textParts, text)
+						}
+
+					default:
+						// Preserve unknown block types as text if they have text
+						if text, ok := blockMap["text"].(string); ok {
+							textParts = append(textParts, text)
 						}
 					}
 				}
-
+				// Flush remaining text
+				if len(textParts) > 0 {
+					input = append(input, map[string]any{
+						"role":    role,
+						"content": strings.Join(textParts, ""),
+					})
+				}
+			default:
 				input = append(input, map[string]any{
 					"role":    role,
-					"content": contentStr,
+					"content": content,
 				})
 			}
 		}
