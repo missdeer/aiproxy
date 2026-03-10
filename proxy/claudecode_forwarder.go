@@ -32,7 +32,7 @@ const (
 	claudeCodeClientID  = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 	claudeCodeBaseURL   = "https://api.anthropic.com"
 	claudeCodeVersion   = "2023-06-01"
-	claudeCodeUserAgent = "claude-cli/2.1.63 (external, sdk-cli)"
+	claudeCodeUserAgent = "claude-cli/2.1.72 (external, sdk-cli)"
 )
 
 // ── Data structures ────────────────────────────────────────────────────
