@@ -279,6 +279,9 @@ func TestClaudeCodeAuth_GetAccessToken_RefreshesAndCaches(t *testing.T) {
 	if c := refreshCallCount.Load(); c != 1 {
 		t.Fatalf("refresh calls = %d, want 1 (should use cache)", c)
 	}
+
+	// Wait for async save goroutine to complete before t.TempDir() cleanup
+	time.Sleep(100 * time.Millisecond)
 }
 
 func TestClaudeCodeAuth_GetAccessToken_EmptyRefreshToken(t *testing.T) {
