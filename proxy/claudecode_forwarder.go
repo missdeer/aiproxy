@@ -72,6 +72,16 @@ var claudeCodeAuthManager = oauthcache.NewManager(oauthcache.Config[ClaudeCodeTo
 		s.Disabled = true
 		return claudeCodeSaveStorage(path, s)
 	},
+	GetExpiry: func(s *ClaudeCodeTokenStorage) time.Time {
+		if s.Expire == "" {
+			return time.Time{}
+		}
+		t, err := time.Parse(time.RFC3339, s.Expire)
+		if err != nil {
+			return time.Time{}
+		}
+		return t
+	},
 })
 
 // claudeCodeRefreshAndUpdate performs the HTTP token refresh and updates storage in-place.

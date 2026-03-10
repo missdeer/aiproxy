@@ -75,6 +75,16 @@ var antigravityAuthManager = oauthcache.NewManager(oauthcache.Config[Antigravity
 		s.Disabled = true
 		return antigravitySaveStorage(path, s)
 	},
+	GetExpiry: func(s *AntigravityTokenStorage) time.Time {
+		if s.ProjectID == "" || s.Expired == "" {
+			return time.Time{}
+		}
+		t, err := time.Parse(time.RFC3339, s.Expired)
+		if err != nil {
+			return time.Time{}
+		}
+		return t
+	},
 })
 
 // antigravityRefreshAndUpdate performs the HTTP token refresh and updates storage in-place.

@@ -65,6 +65,10 @@ func main() {
 		defer cfgManager.StopWatching()
 	}
 
+	// Start proactive token refresh for OAuth-based upstreams
+	stopRefresh := make(chan struct{})
+	go proxy.StartProactiveRefresh(cfgManager.Get, stopRefresh)
+
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/messages", middleware.DecompressionMiddleware(anthropicHandler))
 	mux.Handle("POST /v1/chat/completions", middleware.DecompressionMiddleware(openaiHandler))
@@ -85,6 +89,8 @@ func main() {
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		sig := <-sigCh
 		log.Printf("Received %v, shutting down gracefully...", sig)
+
+		close(stopRefresh)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

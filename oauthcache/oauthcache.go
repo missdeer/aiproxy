@@ -62,6 +62,15 @@ type Config[S any] struct {
 	// Called synchronously when Refresh returns *ErrAuthDisabled.
 	// If nil, only in-memory eviction occurs (no disk persistence).
 	Disable func(path string, s *S) error
+
+	// GetExpiry extracts the token expiry time from on-disk storage.
+	// Used on initial disk load to avoid unnecessary HTTP refresh when the
+	// on-disk token is still valid and the storage is fully ready.
+	// Must return zero time if the expiry is missing/unparsable, the access
+	// token is empty, or handler-specific prerequisites are unmet
+	// (e.g. ProjectID missing for GeminiCLI/Antigravity).
+	// If nil or returns zero time, the manager falls back to calling Refresh.
+	GetExpiry func(s *S) time.Time
 }
 
 // entry manages the token lifecycle for a single auth file.
@@ -86,6 +95,26 @@ type Manager[S any] struct {
 // NewManager creates a new Manager with the given configuration.
 func NewManager[S any](cfg Config[S]) *Manager[S] {
 	return &Manager[S]{cfg: cfg}
+}
+
+// Refresher is a type-erased interface for proactive token refresh.
+// It allows callers to iterate managers of different storage types uniformly.
+type Refresher interface {
+	RefreshAll(files []string, timeout time.Duration)
+}
+
+// RefreshAll proactively calls GetToken for each file, triggering refresh
+// for any token approaching expiry. ErrAuthDisabled is silently skipped.
+func (m *Manager[S]) RefreshAll(files []string, timeout time.Duration) {
+	for _, f := range files {
+		if _, _, err := m.GetToken(f, timeout); err != nil {
+			var disabledErr *ErrAuthDisabled
+			if errors.As(err, &disabledErr) {
+				continue
+			}
+			log.Printf("%s proactive refresh: %s: %v", m.cfg.Label, f, err)
+		}
+	}
 }
 
 // getEntry returns or creates an entry for the given auth file.
@@ -157,6 +186,20 @@ func (m *Manager[S]) GetToken(authFile string, timeout time.Duration) (string, *
 					return nil, disabledErr
 				}
 				return nil, fmt.Errorf("load auth file %s: %w", authFile, err)
+			}
+
+			// If the on-disk token is still valid and the handler confirms
+			// readiness, use it directly without an HTTP refresh.
+			if m.cfg.GetExpiry != nil {
+				if tok := m.cfg.GetAccessToken(storage); tok != "" {
+					if expiry := m.cfg.GetExpiry(storage); !expiry.IsZero() && time.Until(expiry) > 60*time.Second {
+						e.storage = storage
+						e.expiresAt = expiry
+						s := m.cfg.Copy(storage)
+						log.Printf("%s Reusing on-disk token (expires %s) for file: %s", m.cfg.Label, expiry.Format(time.RFC3339), authFile)
+						return &result[S]{tok, &s}, nil
+					}
+				}
 			}
 		}
 

@@ -75,6 +75,16 @@ var codexAuthManager = oauthcache.NewManager(oauthcache.Config[CodexTokenStorage
 		s.Disabled = true
 		return codexSaveStorage(path, s)
 	},
+	GetExpiry: func(s *CodexTokenStorage) time.Time {
+		if s.Expired == "" {
+			return time.Time{}
+		}
+		t, err := time.Parse(time.RFC3339, s.Expired)
+		if err != nil {
+			return time.Time{}
+		}
+		return t
+	},
 })
 
 // codexRefreshAndUpdate performs the HTTP token refresh and updates storage in-place.

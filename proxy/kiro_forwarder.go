@@ -87,6 +87,16 @@ var kiroAuthManager = oauthcache.NewManager(oauthcache.Config[KiroTokenStorage]{
 		s.Disabled = true
 		return kiroSaveStorage(path, s)
 	},
+	GetExpiry: func(s *KiroTokenStorage) time.Time {
+		if s.ExpiresAt == "" {
+			return time.Time{}
+		}
+		t, err := time.Parse(time.RFC3339, s.ExpiresAt)
+		if err != nil {
+			return time.Time{}
+		}
+		return t
+	},
 })
 
 func kiroRefreshAndUpdate(client *http.Client, storage *KiroTokenStorage, authFile string) (time.Duration, error) {

@@ -76,6 +76,23 @@ var geminiCLIAuthManager = oauthcache.NewManager(oauthcache.Config[GeminiCLIToke
 		s.Disabled = true
 		return geminiCLISaveStorage(path, s)
 	},
+	GetExpiry: func(s *GeminiCLITokenStorage) time.Time {
+		if s.ProjectID == "" {
+			return time.Time{}
+		}
+		expiry := geminiCLIStringValue(s.Token, "expiry")
+		if expiry == "" {
+			return time.Time{}
+		}
+		t, err := time.Parse(time.RFC3339, expiry)
+		if err != nil {
+			return time.Time{}
+		}
+		if time.Until(t) <= 5*time.Minute {
+			return time.Time{}
+		}
+		return t
+	},
 })
 
 // geminiCLIRefreshAndUpdate handles the full GeminiCLI refresh flow:
