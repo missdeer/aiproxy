@@ -55,6 +55,9 @@ func main() {
 	geminiHandler := proxy.NewGeminiCompatHandler(cfg, sharedBalancer)
 	modelsHandler := proxy.NewModelsHandler(sharedBalancer)
 
+	// Create auth middleware
+	authMiddleware := middleware.NewAuthMiddleware(cfg)
+
 	// Register reload callback to update all handlers and balancer
 	cfgManager.OnReload(func(newCfg *config.Config) {
 		sharedBalancer.Update(newCfg.Upstreams)
@@ -62,6 +65,7 @@ func main() {
 		openaiHandler.UpdateConfig(newCfg)
 		responsesHandler.UpdateConfig(newCfg)
 		geminiHandler.UpdateConfig(newCfg)
+		authMiddleware.UpdateConfig(newCfg)
 	})
 
 	// Start watching config file for changes
@@ -76,13 +80,13 @@ func main() {
 	go proxy.StartProactiveRefresh(cfgManager.Get, stopRefresh)
 
 	mux := http.NewServeMux()
-	mux.Handle("POST /v1/messages", middleware.DecompressionMiddleware(anthropicHandler))
-	mux.Handle("POST /v1/chat/completions", middleware.DecompressionMiddleware(openaiHandler))
-	mux.Handle("POST /v1/responses", middleware.DecompressionMiddleware(responsesHandler))
-	mux.Handle("POST /v1/responses/compact", middleware.DecompressionMiddleware(responsesHandler))
-	mux.Handle("POST /v1beta/models/{rest...}", middleware.DecompressionMiddleware(geminiHandler))
-	mux.Handle("POST /v1/models/{rest...}", middleware.DecompressionMiddleware(geminiHandler))
-	mux.Handle("GET /models", modelsHandler)
+	mux.Handle("POST /v1/messages", authMiddleware.Middleware(middleware.DecompressionMiddleware(anthropicHandler)))
+	mux.Handle("POST /v1/chat/completions", authMiddleware.Middleware(middleware.DecompressionMiddleware(openaiHandler)))
+	mux.Handle("POST /v1/responses", authMiddleware.Middleware(middleware.DecompressionMiddleware(responsesHandler)))
+	mux.Handle("POST /v1/responses/compact", authMiddleware.Middleware(middleware.DecompressionMiddleware(responsesHandler)))
+	mux.Handle("POST /v1beta/models/{rest...}", authMiddleware.Middleware(middleware.DecompressionMiddleware(geminiHandler)))
+	mux.Handle("POST /v1/models/{rest...}", authMiddleware.Middleware(middleware.DecompressionMiddleware(geminiHandler)))
+	mux.Handle("GET /models", authMiddleware.Middleware(modelsHandler))
 
 	addr := cfg.Bind + cfg.Listen
 	srv := &http.Server{

@@ -79,6 +79,14 @@ func (m *AvailableModelList) UnmarshalYAML(value *yaml.Node) error {
 	return err
 }
 
+type APIKeyList []string
+
+func (a *APIKeyList) UnmarshalYAML(value *yaml.Node) error {
+	v, err := unmarshalStringOrSlice(value)
+	*a = v
+	return err
+}
+
 type Upstream struct {
 	Name               string             `yaml:"name"`
 	Enabled            *bool              `yaml:"enabled"`
@@ -235,6 +243,7 @@ type Config struct {
 	Listen                 string            `yaml:"listen"`
 	DefaultMaxTokens       int               `yaml:"default_max_tokens"`
 	UpstreamRequestTimeout int               `yaml:"upstream_request_timeout"` // Timeout in seconds for upstream requests (default: 60)
+	APIKeys                APIKeyList        `yaml:"api-key"`                  // API keys for client authentication
 	Upstreams              []Upstream        `yaml:"upstreams"`
 	Log                    LogConfig         `yaml:"log"`
 	ModelFallback          map[string]string `yaml:"model_fallback"` // Model fallback chain: key=model, value=fallback model
@@ -273,6 +282,28 @@ func Load(path string) (*Config, error) {
 
 	if cfg.UpstreamRequestTimeout <= 0 {
 		cfg.UpstreamRequestTimeout = 60 // Default 60 seconds
+	}
+
+	// Strip empty/whitespace-only API key entries and deduplicate
+	if len(cfg.APIKeys) > 0 {
+		filtered := cfg.APIKeys[:0]
+		for _, k := range cfg.APIKeys {
+			if strings.TrimSpace(k) != "" {
+				filtered = append(filtered, k)
+			}
+		}
+		cfg.APIKeys = filtered
+	}
+	if len(cfg.APIKeys) > 1 {
+		seen := make(map[string]struct{})
+		unique := make([]string, 0, len(cfg.APIKeys))
+		for _, k := range cfg.APIKeys {
+			if _, dup := seen[k]; !dup {
+				seen[k] = struct{}{}
+				unique = append(unique, k)
+			}
+		}
+		cfg.APIKeys = unique
 	}
 
 	for i := range cfg.Upstreams {
