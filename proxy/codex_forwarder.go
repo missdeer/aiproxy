@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -38,6 +39,15 @@ const (
 	codexVersion      = "0.106.0"
 	codexUserAgent    = "codex_cli_rs/0.106.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464"
 )
+
+var codexClientUARegex = regexp.MustCompile(`^(codex_cli_rs|Codex Desktop)/\d+\.\d+\.\d+(-(alpha|beta|rc|dev|preview)\.[0-9]+)?($|\s\()`)
+
+func codexResolveUserAgent(clientUA string) string {
+	if codexClientUARegex.MatchString(clientUA) {
+		return clientUA
+	}
+	return codexUserAgent
+}
 
 // ── Data structures ────────────────────────────────────────────────────
 
@@ -148,7 +158,7 @@ func buildCodexBasePayload(requestBody []byte) (map[string]any, error) {
 }
 
 // buildCodexRequest constructs the HTTP request for one auth file attempt.
-func buildCodexRequest(client *http.Client, upstream config.Upstream, body []byte, accessToken string, storage *CodexTokenStorage, ctx context.Context) (*http.Request, error) {
+func buildCodexRequest(client *http.Client, upstream config.Upstream, body []byte, accessToken string, storage *CodexTokenStorage, ctx context.Context, clientUserAgent string) (*http.Request, error) {
 	apiURL := codexBaseURL + "/responses"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
@@ -157,7 +167,7 @@ func buildCodexRequest(client *http.Client, upstream config.Upstream, body []byt
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", codexUserAgent)
+	req.Header.Set("User-Agent", codexResolveUserAgent(clientUserAgent))
 	req.Header.Set("Version", codexVersion)
 	req.Header.Set("Originator", "codex_cli_rs")
 	req.Header.Set("Connection", "Keep-Alive")
@@ -179,11 +189,11 @@ func buildCodexRequest(client *http.Client, upstream config.Upstream, body []byt
 // The Codex API always uses SSE streaming; when clientWantsStream is false,
 // the SSE output is reassembled into a single Responses-format JSON response.
 func ForwardToCodex(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
-	return ForwardToCodexWithContext(client, upstream, requestBody, context.Background(), clientWantsStream)
+	return ForwardToCodexWithContext(client, upstream, requestBody, context.Background(), clientWantsStream, "")
 }
 
 // ForwardToCodexWithContext is context-aware variant of ForwardToCodex.
-func ForwardToCodexWithContext(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context, clientWantsStream bool) (int, []byte, http.Header, error) {
+func ForwardToCodexWithContext(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context, clientWantsStream bool, clientUserAgent string) (int, []byte, http.Header, error) {
 	basePayload, err := buildCodexBasePayload(requestBody)
 	if err != nil {
 		return 0, nil, nil, err
@@ -192,7 +202,7 @@ func ForwardToCodexWithContext(client *http.Client, upstream config.Upstream, re
 		Label:   "[CODEX]",
 		Manager: codexAuthManager,
 		BuildReq: func(u config.Upstream, body []byte, token string, storage *CodexTokenStorage, ctx context.Context) (*http.Request, error) {
-			return buildCodexRequest(client, u, body, token, storage, ctx)
+			return buildCodexRequest(client, u, body, token, storage, ctx, clientUserAgent)
 		},
 		ConvertSSE: codexSSEToResponsesJSON,
 	}, client, upstream, basePayload, ctx, clientWantsStream)
@@ -201,7 +211,7 @@ func ForwardToCodexWithContext(client *http.Client, upstream config.Upstream, re
 // ForwardToCodexStream sends a streaming request to the Codex upstream
 // and returns the raw *http.Response with body unconsumed.
 // The caller is responsible for closing resp.Body.
-func ForwardToCodexStream(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Response, error) {
+func ForwardToCodexStream(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context, clientUserAgent string) (*http.Response, error) {
 	basePayload, err := buildCodexBasePayload(requestBody)
 	if err != nil {
 		return nil, err
@@ -210,7 +220,7 @@ func ForwardToCodexStream(client *http.Client, upstream config.Upstream, request
 		Label:   "[CODEX]",
 		Manager: codexAuthManager,
 		BuildReq: func(u config.Upstream, body []byte, token string, storage *CodexTokenStorage, ctx context.Context) (*http.Request, error) {
-			return buildCodexRequest(client, u, body, token, storage, ctx)
+			return buildCodexRequest(client, u, body, token, storage, ctx, clientUserAgent)
 		},
 	}, client, upstream, basePayload, ctx)
 }
@@ -388,12 +398,13 @@ func init() {
 type CodexSender struct{}
 
 func (s *CodexSender) Send(client *http.Client, upstream config.Upstream, canonicalBody []byte, stream bool, originalReq *http.Request) (int, []byte, http.Header, config.APIType, error) {
-	// Codex uses Responses format natively, delegate to ForwardToCodex
 	ctx := context.Background()
+	var clientUA string
 	if originalReq != nil {
 		ctx = originalReq.Context()
+		clientUA = originalReq.Header.Get("User-Agent")
 	}
-	status, respBody, respHeaders, err := ForwardToCodexWithContext(client, upstream, canonicalBody, ctx, stream)
+	status, respBody, respHeaders, err := ForwardToCodexWithContext(client, upstream, canonicalBody, ctx, stream, clientUA)
 	if err != nil {
 		return status, nil, nil, "", err
 	}
@@ -402,7 +413,7 @@ func (s *CodexSender) Send(client *http.Client, upstream config.Upstream, canoni
 }
 
 func (s *CodexSender) SendStream(client *http.Client, upstream config.Upstream, canonicalBody []byte, originalReq *http.Request) (*http.Response, config.APIType, error) {
-	resp, err := ForwardToCodexStream(client, upstream, canonicalBody, originalReq.Context())
+	resp, err := ForwardToCodexStream(client, upstream, canonicalBody, originalReq.Context(), originalReq.Header.Get("User-Agent"))
 	if err != nil {
 		return nil, "", err
 	}

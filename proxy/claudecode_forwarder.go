@@ -17,6 +17,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -34,6 +35,15 @@ const (
 	claudeCodeVersion   = "2023-06-01"
 	claudeCodeUserAgent = "claude-cli/2.1.72 (external, sdk-cli)"
 )
+
+var claudeCodeClientUARegex = regexp.MustCompile(`^claude-cli/\d+\.\d+\.\d+ \(external, cli\)$`)
+
+func claudeCodeResolveUserAgent(clientUA string) string {
+	if claudeCodeClientUARegex.MatchString(clientUA) {
+		return clientUA
+	}
+	return claudeCodeUserAgent
+}
 
 // ── Data structures ────────────────────────────────────────────────────
 
@@ -126,7 +136,7 @@ func buildClaudeCodeBasePayload(requestBody []byte, clientWantsStream bool) (map
 }
 
 // buildClaudeCodeRequest constructs the HTTP request for one auth file attempt.
-func buildClaudeCodeRequest(client *http.Client, upstream config.Upstream, body []byte, accessToken string, ctx context.Context) (*http.Request, error) {
+func buildClaudeCodeRequest(client *http.Client, upstream config.Upstream, body []byte, accessToken string, ctx context.Context, clientUserAgent string) (*http.Request, error) {
 	apiURL := claudeCodeBaseURL + "/v1/messages?beta=true"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
@@ -137,7 +147,7 @@ func buildClaudeCodeRequest(client *http.Client, upstream config.Upstream, body 
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Anthropic-Version", claudeCodeVersion)
 	req.Header.Set("Anthropic-Beta", "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14,prompt-caching-2024-07-31")
-	req.Header.Set("User-Agent", claudeCodeUserAgent)
+	req.Header.Set("User-Agent", claudeCodeResolveUserAgent(clientUserAgent))
 	req.Header.Set("X-Stainless-Lang", "go")
 	req.Header.Set("X-Stainless-Package-Version", "2.1.44")
 	req.Header.Set("X-Stainless-Runtime", "go")
@@ -159,11 +169,11 @@ func buildClaudeCodeRequest(client *http.Client, upstream config.Upstream, body 
 // The Claude Code API supports both streaming and non-streaming; when clientWantsStream is false,
 // the SSE output is reassembled into a single JSON response.
 func ForwardToClaudeCode(client *http.Client, upstream config.Upstream, requestBody []byte, clientWantsStream bool) (int, []byte, http.Header, error) {
-	return ForwardToClaudeCodeWithContext(client, upstream, requestBody, context.Background(), clientWantsStream)
+	return ForwardToClaudeCodeWithContext(client, upstream, requestBody, context.Background(), clientWantsStream, "")
 }
 
 // ForwardToClaudeCodeWithContext is context-aware variant of ForwardToClaudeCode.
-func ForwardToClaudeCodeWithContext(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context, clientWantsStream bool) (int, []byte, http.Header, error) {
+func ForwardToClaudeCodeWithContext(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context, clientWantsStream bool, clientUserAgent string) (int, []byte, http.Header, error) {
 	basePayload, err := buildClaudeCodeBasePayload(requestBody, clientWantsStream)
 	if err != nil {
 		return 0, nil, nil, err
@@ -172,7 +182,7 @@ func ForwardToClaudeCodeWithContext(client *http.Client, upstream config.Upstrea
 		Label:   "[CLAUDECODE]",
 		Manager: claudeCodeAuthManager,
 		BuildReq: func(u config.Upstream, body []byte, token string, _ *ClaudeCodeTokenStorage, ctx context.Context) (*http.Request, error) {
-			return buildClaudeCodeRequest(client, u, body, token, ctx)
+			return buildClaudeCodeRequest(client, u, body, token, ctx, clientUserAgent)
 		},
 		ConvertSSE: claudeCodeSSEToJSON,
 		NeedConvert: func(headers http.Header, clientWantsStream bool) bool {
@@ -184,7 +194,7 @@ func ForwardToClaudeCodeWithContext(client *http.Client, upstream config.Upstrea
 // ForwardToClaudeCodeStream sends a streaming request to the Claude Code upstream
 // and returns the raw *http.Response with body unconsumed.
 // The caller is responsible for closing resp.Body.
-func ForwardToClaudeCodeStream(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context) (*http.Response, error) {
+func ForwardToClaudeCodeStream(client *http.Client, upstream config.Upstream, requestBody []byte, ctx context.Context, clientUserAgent string) (*http.Response, error) {
 	basePayload, err := buildClaudeCodeBasePayload(requestBody, true)
 	if err != nil {
 		return nil, err
@@ -193,7 +203,7 @@ func ForwardToClaudeCodeStream(client *http.Client, upstream config.Upstream, re
 		Label:   "[CLAUDECODE]",
 		Manager: claudeCodeAuthManager,
 		BuildReq: func(u config.Upstream, body []byte, token string, _ *ClaudeCodeTokenStorage, ctx context.Context) (*http.Request, error) {
-			return buildClaudeCodeRequest(client, u, body, token, ctx)
+			return buildClaudeCodeRequest(client, u, body, token, ctx, clientUserAgent)
 		},
 	}, client, upstream, basePayload, ctx)
 }
@@ -502,12 +512,13 @@ func (s *ClaudeCodeSender) Send(client *http.Client, upstream config.Upstream, c
 		return 0, nil, nil, "", err
 	}
 
-	// ForwardToClaudeCode returns Anthropic-format data
 	ctx := context.Background()
+	var clientUA string
 	if originalReq != nil {
 		ctx = originalReq.Context()
+		clientUA = originalReq.Header.Get("User-Agent")
 	}
-	status, respBody, respHeaders, err := ForwardToClaudeCodeWithContext(client, upstream, modifiedBody, ctx, stream)
+	status, respBody, respHeaders, err := ForwardToClaudeCodeWithContext(client, upstream, modifiedBody, ctx, stream, clientUA)
 	if err != nil {
 		return status, nil, nil, "", err
 	}
@@ -527,7 +538,7 @@ func (s *ClaudeCodeSender) SendStream(client *http.Client, upstream config.Upstr
 		return nil, "", err
 	}
 
-	resp, err := ForwardToClaudeCodeStream(client, upstream, modifiedBody, originalReq.Context())
+	resp, err := ForwardToClaudeCodeStream(client, upstream, modifiedBody, originalReq.Context(), originalReq.Header.Get("User-Agent"))
 	if err != nil {
 		return nil, "", err
 	}

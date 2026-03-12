@@ -285,7 +285,7 @@ func TestForwardToCodexStream_AuthFileFailover(t *testing.T) {
 		RequestCompression: "none",
 	}
 
-	resp, err := ForwardToCodexStream(client, upstream, []byte(`{"input":"hello"}`), context.Background())
+	resp, err := ForwardToCodexStream(client, upstream, []byte(`{"input":"hello"}`), context.Background(), "")
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -343,7 +343,7 @@ func TestForwardToCodexStream_ClosesPriorErrorResponseOnSuccess(t *testing.T) {
 		RequestCompression: "none",
 	}
 
-	resp, err := ForwardToCodexStream(client, upstream, []byte(`{"input":"hello"}`), context.Background())
+	resp, err := ForwardToCodexStream(client, upstream, []byte(`{"input":"hello"}`), context.Background(), "")
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -385,7 +385,7 @@ func TestForwardToCodexStream_AllFail_ReturnsLastResponse(t *testing.T) {
 		RequestCompression: "none",
 	}
 
-	resp, err := ForwardToCodexStream(client, upstream, []byte(`{"input":"hello"}`), context.Background())
+	resp, err := ForwardToCodexStream(client, upstream, []byte(`{"input":"hello"}`), context.Background(), "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v (should return *http.Response)", err)
 	}

@@ -309,16 +309,17 @@ func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string
 			return 0, nil, nil, nil, err
 		}
 		ctx := originalReq.Context()
+		clientUA := originalReq.Header.Get("User-Agent")
 
 		if clientWantsStream {
-			resp, err := ForwardToClaudeCodeStream(h.client, upstream, modifiedBody, ctx)
+			resp, err := ForwardToClaudeCodeStream(h.client, upstream, modifiedBody, ctx, clientUA)
 			if err != nil {
 				return 0, nil, nil, nil, err
 			}
 			return HandleStreamResponse(resp)
 		}
 
-		status, respBody, headers, err := ForwardToClaudeCodeWithContext(h.client, upstream, modifiedBody, ctx, false)
+		status, respBody, headers, err := ForwardToClaudeCodeWithContext(h.client, upstream, modifiedBody, ctx, false, clientUA)
 		if err != nil {
 			return 0, nil, nil, nil, err
 		}

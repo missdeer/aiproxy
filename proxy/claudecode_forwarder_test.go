@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/missdeer/aiproxy/config"
 )
 
 // ── claudeCodeLoadStorage / claudeCodeSaveStorage tests ────────────────
@@ -333,5 +335,174 @@ func TestClaudeCodeAuth_GetAccessToken_RefreshFails(t *testing.T) {
 	_, _, err := claudeCodeAuthManager.GetToken(authFile, 30*time.Second)
 	if err == nil {
 		t.Fatal("expected error when refresh fails")
+	}
+}
+
+func TestClaudeCodeResolveUserAgent(t *testing.T) {
+	tests := []struct {
+		name     string
+		clientUA string
+		want     string
+	}{
+		{"empty", "", claudeCodeUserAgent},
+		{"unrelated", "Mozilla/5.0", claudeCodeUserAgent},
+		{"official CLI", "claude-cli/2.1.72 (external, cli)", "claude-cli/2.1.72 (external, cli)"},
+		{"official CLI older", "claude-cli/1.0.0 (external, cli)", "claude-cli/1.0.0 (external, cli)"},
+		{"official CLI newer", "claude-cli/3.5.10 (external, cli)", "claude-cli/3.5.10 (external, cli)"},
+		{"wrong format no space", "claude-cli/2.1.72(external,cli)", claudeCodeUserAgent},
+		{"wrong format single space", "claude-cli/2.1.72 (external,cli)", claudeCodeUserAgent},
+		{"malicious suffix", "claude-cli/2.1.72 (external, cli) malicious", claudeCodeUserAgent},
+		{"tab instead of space", "claude-cli/2.1.72\t(external,\tcli)", claudeCodeUserAgent},
+		{"sdk not cli", "claude-cli/2.1.72 (external, sdk-cli)", claudeCodeUserAgent},
+		{"partial prefix", "claude-cli/2.1", claudeCodeUserAgent},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := claudeCodeResolveUserAgent(tt.clientUA)
+			if got != tt.want {
+				t.Errorf("claudeCodeResolveUserAgent(%q) = %q, want %q", tt.clientUA, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudeCodeSender_UserAgentPassthrough(t *testing.T) {
+	tmpDir := t.TempDir()
+	authFile := filepath.Join(tmpDir, "auth.json")
+
+	s := &ClaudeCodeTokenStorage{
+		AccessToken:  "test-token",
+		RefreshToken: "ref",
+		Email:        "test@example.com",
+	}
+	data, _ := json.Marshal(s)
+	os.WriteFile(authFile, data, 0644)
+
+	claudeCodeAuthManager.StoreEntry(authFile, s, time.Now().Add(1*time.Hour), &http.Client{Timeout: 30 * time.Second})
+	defer claudeCodeAuthManager.DeleteEntry(authFile)
+
+	tests := []struct {
+		name       string
+		clientUA   string
+		expectedUA string
+	}{
+		{"official CLI", "claude-cli/2.1.72 (external, cli)", "claude-cli/2.1.72 (external, cli)"},
+		{"official CLI older", "claude-cli/1.5.0 (external, cli)", "claude-cli/1.5.0 (external, cli)"},
+		{"unrecognized client", "Mozilla/5.0", claudeCodeUserAgent},
+		{"empty UA", "", claudeCodeUserAgent},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedUA string
+			client := &http.Client{
+				Transport: &mockRoundTripper{
+					handler: func(req *http.Request) (*http.Response, error) {
+						capturedUA = req.Header.Get("User-Agent")
+						sse := "event: message_start\n" +
+							"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg1\",\"model\":\"claude-opus-4\"}}\n\n" +
+							"event: content_block_start\n" +
+							"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+							"event: content_block_delta\n" +
+							"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n" +
+							"event: message_stop\n" +
+							"data: {\"type\":\"message_stop\"}\n\n"
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Body:       io.NopCloser(bytes.NewReader([]byte(sse))),
+							Header:     http.Header{"Content-Type": {"text/event-stream"}},
+						}, nil
+					},
+				},
+			}
+
+			upstream := config.Upstream{
+				Name:               "test-claudecode",
+				AuthFiles:          []string{authFile},
+				RequestCompression: "none",
+			}
+
+			sender := &ClaudeCodeSender{}
+			originalReq, _ := http.NewRequest("POST", "/v1/messages", nil)
+			if tt.clientUA != "" {
+				originalReq.Header.Set("User-Agent", tt.clientUA)
+			}
+
+			_, _, _, _, err := sender.Send(client, upstream, []byte(`{"messages":[{"role":"user","content":"test"}],"model":"claude-opus-4"}`), false, originalReq)
+			if err != nil {
+				t.Fatalf("Send() error = %v", err)
+			}
+
+			if capturedUA != tt.expectedUA {
+				t.Errorf("captured User-Agent = %q, want %q", capturedUA, tt.expectedUA)
+			}
+		})
+	}
+}
+
+func TestClaudeCodeSender_UserAgentPassthrough_Stream(t *testing.T) {
+	tmpDir := t.TempDir()
+	authFile := filepath.Join(tmpDir, "auth.json")
+
+	s := &ClaudeCodeTokenStorage{
+		AccessToken:  "test-token",
+		RefreshToken: "ref",
+		Email:        "test@example.com",
+	}
+	data, _ := json.Marshal(s)
+	os.WriteFile(authFile, data, 0644)
+
+	claudeCodeAuthManager.StoreEntry(authFile, s, time.Now().Add(1*time.Hour), &http.Client{Timeout: 30 * time.Second})
+	defer claudeCodeAuthManager.DeleteEntry(authFile)
+
+	tests := []struct {
+		name       string
+		clientUA   string
+		expectedUA string
+	}{
+		{"official CLI passthrough", "claude-cli/2.0.0 (external, cli)", "claude-cli/2.0.0 (external, cli)"},
+		{"unrecognized fallback", "Mozilla/5.0", claudeCodeUserAgent},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedUA string
+			client := &http.Client{
+				Transport: &mockRoundTripper{
+					handler: func(req *http.Request) (*http.Response, error) {
+						capturedUA = req.Header.Get("User-Agent")
+						sse := "event: message_start\n" +
+							"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg1\",\"model\":\"claude-opus-4\"}}\n\n"
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Body:       io.NopCloser(bytes.NewReader([]byte(sse))),
+							Header:     http.Header{"Content-Type": {"text/event-stream"}},
+						}, nil
+					},
+				},
+			}
+
+			upstream := config.Upstream{
+				Name:               "test-claudecode",
+				AuthFiles:          []string{authFile},
+				RequestCompression: "none",
+			}
+
+			sender := &ClaudeCodeSender{}
+			originalReq, _ := http.NewRequest("POST", "/v1/messages", nil)
+			if tt.clientUA != "" {
+				originalReq.Header.Set("User-Agent", tt.clientUA)
+			}
+
+			resp, _, err := sender.SendStream(client, upstream, []byte(`{"messages":[{"role":"user","content":"test"}],"model":"claude-opus-4"}`), originalReq)
+			if err != nil {
+				t.Fatalf("SendStream() error = %v", err)
+			}
+			defer resp.Body.Close()
+
+			if capturedUA != tt.expectedUA {
+				t.Errorf("captured User-Agent = %q, want %q", capturedUA, tt.expectedUA)
+			}
+		})
 	}
 }

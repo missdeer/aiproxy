@@ -717,3 +717,156 @@ func TestForwardToCodex_InvalidRequestBody(t *testing.T) {
 		t.Fatal("expected error for invalid JSON body")
 	}
 }
+
+func TestCodexResolveUserAgent(t *testing.T) {
+	tests := []struct {
+		name     string
+		clientUA string
+		want     string
+	}{
+		{"empty", "", codexUserAgent},
+		{"unrelated", "Mozilla/5.0", codexUserAgent},
+		{"codex CLI match", "codex_cli_rs/0.106.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464", "codex_cli_rs/0.106.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464"},
+		{"codex CLI older", "codex_cli_rs/0.99.1 (Linux/6.1)", "codex_cli_rs/0.99.1 (Linux/6.1)"},
+		{"codex CLI version only", "codex_cli_rs/0.106.0", "codex_cli_rs/0.106.0"},
+		{"codex Desktop match", "Codex Desktop/1.0.0 (Windows)", "Codex Desktop/1.0.0 (Windows)"},
+		{"codex Desktop newer", "Codex Desktop/2.12.3 (macOS)", "Codex Desktop/2.12.3 (macOS)"},
+		{"codex Desktop with prerelease", "Codex Desktop/0.112.0-alpha.3 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.306.11636)", "Codex Desktop/0.112.0-alpha.3 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.306.11636)"},
+		{"partial prefix no match", "codex_cli_rs", codexUserAgent},
+		{"malicious suffix no space", "codex_cli_rs/0.106.0-evil", codexUserAgent},
+		{"malicious suffix with dash", "Codex Desktop/1.0.0-malicious-payload", codexUserAgent},
+		{"malicious after space", "codex_cli_rs/1.0.0 malicious", codexUserAgent},
+		{"malicious Desktop after space", "Codex Desktop/1.0.0 Windows evil", codexUserAgent},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := codexResolveUserAgent(tt.clientUA)
+			if got != tt.want {
+				t.Errorf("codexResolveUserAgent(%q) = %q, want %q", tt.clientUA, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCodexSender_UserAgentPassthrough(t *testing.T) {
+	tmpDir := t.TempDir()
+	authFile := filepath.Join(tmpDir, "auth.json")
+
+	s := &CodexTokenStorage{
+		AccessToken:  "test-token",
+		AccountID:    "acct-123",
+		RefreshToken: "ref",
+		Email:        "test@example.com",
+	}
+	data, _ := json.Marshal(s)
+	os.WriteFile(authFile, data, 0644)
+
+	codexAuthManager.StoreEntry(authFile, s, time.Now().Add(1*time.Hour), &http.Client{Timeout: 30 * time.Second})
+	defer codexAuthManager.DeleteEntry(authFile)
+
+	tests := []struct {
+		name       string
+		clientUA   string
+		expectedUA string
+	}{
+		{"official CLI", "codex_cli_rs/0.106.0 (Mac OS 26.0.1; arm64)", "codex_cli_rs/0.106.0 (Mac OS 26.0.1; arm64)"},
+		{"official Desktop", "Codex Desktop/1.2.3 (Windows)", "Codex Desktop/1.2.3 (Windows)"},
+		{"prerelease Desktop", "Codex Desktop/0.112.0-alpha.3 (Windows)", "Codex Desktop/0.112.0-alpha.3 (Windows)"},
+		{"unrecognized client", "Mozilla/5.0", codexUserAgent},
+		{"empty UA", "", codexUserAgent},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedUA string
+			client := &http.Client{
+				Transport: &mockRoundTripper{
+					handler: func(req *http.Request) (*http.Response, error) {
+						capturedUA = req.Header.Get("User-Agent")
+						sse := `data: {"type":"response.output_text.delta","delta":"ok"}` + "\n" +
+							`data: {"type":"response.completed","response":{"id":"r1","model":"codex-mini"}}` + "\n"
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Body:       io.NopCloser(bytes.NewReader([]byte(sse))),
+							Header:     http.Header{"Content-Type": {"text/event-stream"}},
+						}, nil
+					},
+				},
+			}
+
+			upstream := config.Upstream{
+				Name:               "test-codex",
+				AuthFiles:          []string{authFile},
+				RequestCompression: "none",
+			}
+
+			sender := &CodexSender{}
+			originalReq, _ := http.NewRequest("POST", "/v1/responses", nil)
+			if tt.clientUA != "" {
+				originalReq.Header.Set("User-Agent", tt.clientUA)
+			}
+
+			_, _, _, _, err := sender.Send(client, upstream, []byte(`{"input":"test"}`), false, originalReq)
+			if err != nil {
+				t.Fatalf("Send() error = %v", err)
+			}
+
+			if capturedUA != tt.expectedUA {
+				t.Errorf("captured User-Agent = %q, want %q", capturedUA, tt.expectedUA)
+			}
+		})
+	}
+}
+
+func TestCodexSender_UserAgentPassthrough_Stream(t *testing.T) {
+	tmpDir := t.TempDir()
+	authFile := filepath.Join(tmpDir, "auth.json")
+
+	s := &CodexTokenStorage{
+		AccessToken:  "test-token",
+		AccountID:    "acct-123",
+		RefreshToken: "ref",
+		Email:        "test@example.com",
+	}
+	data, _ := json.Marshal(s)
+	os.WriteFile(authFile, data, 0644)
+
+	codexAuthManager.StoreEntry(authFile, s, time.Now().Add(1*time.Hour), &http.Client{Timeout: 30 * time.Second})
+	defer codexAuthManager.DeleteEntry(authFile)
+
+	var capturedUA string
+	client := &http.Client{
+		Transport: &mockRoundTripper{
+			handler: func(req *http.Request) (*http.Response, error) {
+				capturedUA = req.Header.Get("User-Agent")
+				sse := `data: {"type":"response.output_text.delta","delta":"ok"}` + "\n"
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader([]byte(sse))),
+					Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				}, nil
+			},
+		},
+	}
+
+	upstream := config.Upstream{
+		Name:               "test-codex",
+		AuthFiles:          []string{authFile},
+		RequestCompression: "none",
+	}
+
+	sender := &CodexSender{}
+	originalReq, _ := http.NewRequest("POST", "/v1/responses", nil)
+	originalReq.Header.Set("User-Agent", "codex_cli_rs/1.0.0 (Linux)")
+
+	resp, _, err := sender.SendStream(client, upstream, []byte(`{"input":"test"}`), originalReq)
+	if err != nil {
+		t.Fatalf("SendStream() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	expectedUA := "codex_cli_rs/1.0.0 (Linux)"
+	if capturedUA != expectedUA {
+		t.Errorf("captured User-Agent = %q, want %q", capturedUA, expectedUA)
+	}
+}
