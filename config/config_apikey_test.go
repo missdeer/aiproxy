@@ -1,11 +1,36 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestAPIKeyNormalization(t *testing.T) {
-	cfg, err := Load("../tmp/test_config.yaml")
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "test_config.yaml")
+
+	configContent := `
+bind: "127.0.0.1"
+listen: ":8080"
+api-key:
+  - "valid-key-1"
+  - "valid-key-2"
+  - ""
+  - "valid-key-3"
+  - "valid-key-1"
+upstreams:
+  - name: "test"
+    base_url: "https://api.example.com"
+    token: "test-token"
+    weight: 1
+    api_type: "anthropic"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	cfg, err := Load(configPath)
 	if err != nil {
 		t.Fatalf("Failed to load config: %v", err)
 	}
