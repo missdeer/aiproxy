@@ -120,35 +120,6 @@ func (b *BaseHandler) GetConfig() *config.Config {
 	return b.cfg.Load()
 }
 
-// FilterAndOrderUpstreams returns upstreams that support the given model,
-// ordered starting from the next upstream in round-robin rotation.
-// Each upstream returned consumes one round-robin slot, so after trying N
-// upstreams the next call will continue from where we left off.
-func (b *BaseHandler) FilterAndOrderUpstreams(model string) ([]config.Upstream, error) {
-	n := b.Balancer.Len()
-	if n == 0 {
-		return nil, nil
-	}
-
-	tried := make(map[string]bool)
-	var ordered []config.Upstream
-
-	for {
-		next := b.Balancer.NextUniqueForModel(model, tried)
-		if next == nil {
-			break // no (more) untried matching upstreams
-		}
-		tried[next.Name] = true
-		ordered = append(ordered, *next)
-	}
-
-	if len(ordered) == 0 {
-		return nil, nil
-	}
-
-	return ordered, nil
-}
-
 // appendGeminiKey appends ?key=token (or &key=token) to rawURL using proper
 // URL parsing, unless the "key" query parameter is already present.
 func appendGeminiKey(rawURL, token string) string {
