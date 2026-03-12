@@ -147,40 +147,19 @@ func (h *GeminiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Filter upstreams that support the requested model and are available
-		var supportedUpstreams []config.Upstream
-		for _, u := range upstreams {
-			if u.SupportsModel(currentModel) && h.balancer.IsAvailable(u.Name, currentModel) {
-				supportedUpstreams = append(supportedUpstreams, u)
-			}
-		}
-
-		if len(supportedUpstreams) == 0 {
-			log.Printf("[WARN] No available upstream supports model: %s", currentModel)
-			goto tryFallback
-		}
-
-		log.Printf("[INFO] Found %d available upstreams for model %s", len(supportedUpstreams), currentModel)
-
 		{
-			// Use NextForModel to get the next upstream that supports this model
-			next := h.balancer.NextForModel(currentModel)
+			tried := make(map[string]bool)
+			foundAny := false
 
-			// Reorder upstreams: start from the one returned by NextForModel
-			startIdx := 0
-			if next != nil {
-				for i, u := range supportedUpstreams {
-					if u.Name == next.Name {
-						startIdx = i
-						break
-					}
+			for {
+				next := h.balancer.NextUniqueForModel(currentModel, tried)
+				if next == nil {
+					break // no untried matching upstream
 				}
-			}
-			ordered := make([]config.Upstream, 0, len(supportedUpstreams))
-			ordered = append(ordered, supportedUpstreams[startIdx:]...)
-			ordered = append(ordered, supportedUpstreams[:startIdx]...)
+				tried[next.Name] = true
+				foundAny = true
+				upstream := *next
 
-			for _, upstream := range ordered {
 				attemptedUpstream = true
 				mappedModel := upstream.MapModel(currentModel)
 				log.Printf("[FORWARD] Upstream: %s, URL: %s, Model: %s -> %s, APIType: %s",
@@ -262,11 +241,13 @@ func (h *GeminiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// All upstreams failed for this model
-			log.Printf("[FAILED] All %d upstreams failed for model %s, last error: %v, last status: %d", len(ordered), currentModel, lastErr, lastStatus)
+			if foundAny {
+				// All upstreams failed for this model
+				log.Printf("[FAILED] All upstreams failed for model %s, last error: %v, last status: %d", currentModel, lastErr, lastStatus)
+			} else {
+				log.Printf("[WARN] No available upstream supports model: %s", currentModel)
+			}
 		}
-
-	tryFallback:
 		// Client disconnected — don't attempt fallback models
 		if r.Context().Err() != nil {
 			log.Printf("[INFO] Client disconnected, aborting fallback")

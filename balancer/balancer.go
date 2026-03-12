@@ -266,6 +266,52 @@ func (w *WeightedRoundRobin) NextForModel(model string) *config.Upstream {
 	return nil
 }
 
+// NextUniqueForModel returns the next available upstream that supports the given
+// model and whose name is NOT in the skip set. This handles weighted round-robin
+// correctly: with weights like a=5, b=1, c=1 the WRR sequence contains repeated
+// entries (a,a,a,a,a,b,c). Plain NextForModel would return "a" twice before "b",
+// but NextUniqueForModel skips already-tried names so every unique upstream is
+// reached within one full WRR cycle.
+//
+// If no untried matching upstream exists the internal state is restored (same
+// semantics as NextForModel on no-match) and nil is returned.
+func (w *WeightedRoundRobin) NextUniqueForModel(model string, skip map[string]bool) *config.Upstream {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if len(w.upstreams) == 0 {
+		return nil
+	}
+
+	savedCurrent := w.current
+	savedCw := w.cw
+
+	totalWeight := 0
+	for _, wt := range w.weights {
+		totalWeight += wt
+	}
+	maxIterations := totalWeight / w.gcd
+
+	for i := 0; i < maxIterations; i++ {
+		next := w.nextLocked()
+		if next == nil {
+			continue
+		}
+		if skip[next.Name] {
+			continue // skip already-tried, but keep advancing RR
+		}
+		if next.SupportsModel(model) && w.isAvailableLocked(next.Name, model) {
+			return next
+		}
+	}
+
+	// No untried match found — restore state
+	w.current = savedCurrent
+	w.cw = savedCw
+
+	return nil
+}
+
 // GetAll returns all upstreams in weighted order starting from current position
 func (w *WeightedRoundRobin) GetAll() []config.Upstream {
 	w.mu.Lock()

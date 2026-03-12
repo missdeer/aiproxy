@@ -121,39 +121,30 @@ func (b *BaseHandler) GetConfig() *config.Config {
 }
 
 // FilterAndOrderUpstreams returns upstreams that support the given model,
-// ordered starting from the next upstream in round-robin rotation
+// ordered starting from the next upstream in round-robin rotation.
+// Each upstream returned consumes one round-robin slot, so after trying N
+// upstreams the next call will continue from where we left off.
 func (b *BaseHandler) FilterAndOrderUpstreams(model string) ([]config.Upstream, error) {
-	upstreams := b.Balancer.GetAll()
-
-	// Filter upstreams that support the requested model and are available
-	var supportedUpstreams []config.Upstream
-	for _, u := range upstreams {
-		if u.SupportsModel(model) && b.Balancer.IsAvailable(u.Name, model) {
-			supportedUpstreams = append(supportedUpstreams, u)
-		}
-	}
-
-	if len(supportedUpstreams) == 0 {
+	n := b.Balancer.Len()
+	if n == 0 {
 		return nil, nil
 	}
 
-	// Use NextForModel to get the next upstream that supports this model
-	next := b.Balancer.NextForModel(model)
+	tried := make(map[string]bool)
+	var ordered []config.Upstream
 
-	// Reorder upstreams: start from the one returned by NextForModel
-	startIdx := 0
-	if next != nil {
-		for i, u := range supportedUpstreams {
-			if u.Name == next.Name {
-				startIdx = i
-				break
-			}
+	for {
+		next := b.Balancer.NextUniqueForModel(model, tried)
+		if next == nil {
+			break // no (more) untried matching upstreams
 		}
+		tried[next.Name] = true
+		ordered = append(ordered, *next)
 	}
 
-	ordered := make([]config.Upstream, 0, len(supportedUpstreams))
-	ordered = append(ordered, supportedUpstreams[startIdx:]...)
-	ordered = append(ordered, supportedUpstreams[:startIdx]...)
+	if len(ordered) == 0 {
+		return nil, nil
+	}
 
 	return ordered, nil
 }
