@@ -14,6 +14,10 @@ default_max_tokens: 4096
 # This prevents requests from hanging indefinitely when upstream services are slow or unresponsive
 upstream_request_timeout: 60
 
+api-key:
+  - "your-api-key-1"
+  - "your-api-key-2"
+
 # Rotating file log configuration (optional)
 # If not specified or file is empty, logs go to stdout
 log:
