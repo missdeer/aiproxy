@@ -24,20 +24,20 @@ type OpenAIHandler struct {
 }
 
 // NewOpenAIHandler creates a new OpenAI-compatible handler
-func NewOpenAIHandler(cfg *config.Config) *OpenAIHandler {
+func NewOpenAIHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *OpenAIHandler {
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	h := &OpenAIHandler{
-		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
+		balancer: bal,
 		client:   newHTTPClient(timeout),
 	}
 	h.cfg.Store(cfg)
 	return h
 }
 
-// UpdateConfig atomically swaps the configuration snapshot and updates the balancer.
+// UpdateConfig atomically swaps the configuration snapshot.
+// Note: balancer is shared and updated externally.
 func (h *OpenAIHandler) UpdateConfig(cfg *config.Config) {
 	h.cfg.Store(cfg)
-	h.balancer.Update(cfg.Upstreams)
 }
 
 // OpenAI request/response types

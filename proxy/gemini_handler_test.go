@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/missdeer/aiproxy/balancer"
 	"github.com/missdeer/aiproxy/config"
 )
 
@@ -546,7 +547,8 @@ func TestGeminiHandler_NoSupportedModel_NoFallback_ReturnsModelNotFound(t *testi
 		},
 	}
 
-	h := NewGeminiHandler(cfg)
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	h := NewGeminiHandler(cfg, bal)
 	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.0-flash:generateContent", strings.NewReader(`{
 		"contents":[{"role":"user","parts":[{"text":"hello"}]}]
 	}`))

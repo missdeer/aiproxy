@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -392,4 +393,35 @@ func (w *WeightedRoundRobin) Update(upstreams []config.Upstream) {
 	w.cw = 0
 	w.gcd = gcd
 	w.maxWeight = maxWeight
+}
+
+// AvailableModels returns a sorted list of all models that have at least one available upstream.
+// A model is considered available if at least one upstream supports it and is not circuit-broken.
+// Note: Only models explicitly listed in upstream.AvailableModels are included.
+// Upstreams without AvailableModels configured (supporting all models) are not enumerated.
+func (w *WeightedRoundRobin) AvailableModels() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	modelSet := make(map[string]bool)
+
+	for _, u := range w.upstreams {
+		if len(u.AvailableModels) == 0 {
+			continue
+		}
+		for _, model := range u.AvailableModels {
+			if w.isAvailableLocked(u.Name, model) {
+				modelSet[model] = true
+			}
+		}
+	}
+
+	models := make([]string, 0, len(modelSet))
+	for model := range modelSet {
+		models = append(models, model)
+	}
+
+	// Sort for deterministic response order
+	sort.Strings(models)
+	return models
 }

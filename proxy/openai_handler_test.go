@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/missdeer/aiproxy/balancer"
 	"github.com/missdeer/aiproxy/config"
 )
 
@@ -223,7 +224,8 @@ func TestOpenAIHandler_NoSupportedModel_NoFallback_ReturnsModelNotFound(t *testi
 		},
 	}
 
-	h := NewOpenAIHandler(cfg)
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	h := NewOpenAIHandler(cfg, bal)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
 		"model":"gpt-5",
 		"messages":[{"role":"user","content":"hello"}]
@@ -275,7 +277,8 @@ func TestOpenAIHandler_ModelFallback_Success(t *testing.T) {
 		},
 	}
 
-	h := NewOpenAIHandler(cfg)
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	h := NewOpenAIHandler(cfg, bal)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`))
 	rec := httptest.NewRecorder()
 
@@ -313,7 +316,8 @@ func TestOpenAIHandler_ModelFallback_CycleTerminates(t *testing.T) {
 		},
 	}
 
-	h := NewOpenAIHandler(cfg)
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	h := NewOpenAIHandler(cfg, bal)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`))
 	rec := httptest.NewRecorder()
 

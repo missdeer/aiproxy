@@ -21,20 +21,20 @@ type AnthropicHandler struct {
 	client   *http.Client
 }
 
-func NewAnthropicHandler(cfg *config.Config) *AnthropicHandler {
+func NewAnthropicHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *AnthropicHandler {
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	h := &AnthropicHandler{
-		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
+		balancer: bal,
 		client:   newHTTPClient(timeout),
 	}
 	h.cfg.Store(cfg)
 	return h
 }
 
-// UpdateConfig atomically swaps the configuration snapshot and updates the balancer.
+// UpdateConfig atomically swaps the configuration snapshot.
+// Note: balancer is shared and updated externally.
 func (h *AnthropicHandler) UpdateConfig(cfg *config.Config) {
 	h.cfg.Store(cfg)
-	h.balancer.Update(cfg.Upstreams)
 }
 
 type MessageRequest struct {

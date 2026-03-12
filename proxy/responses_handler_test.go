@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/missdeer/aiproxy/balancer"
 	"github.com/missdeer/aiproxy/config"
 )
 
@@ -73,7 +74,8 @@ func TestResponsesHandler_NoSupportedModel_NoFallback_ReturnsModelNotFound(t *te
 		},
 	}
 
-	h := NewResponsesHandler(cfg)
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	h := NewResponsesHandler(cfg, bal)
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 		"model":"gpt-5",
 		"input":"hello"
@@ -92,7 +94,8 @@ func TestResponsesHandler_NoSupportedModel_NoFallback_ReturnsModelNotFound(t *te
 
 func TestResponsesHandler_ForwardRequest_NativeResponsesCompactPreservesPathAndQuery(t *testing.T) {
 	cfg := &config.Config{UpstreamRequestTimeout: 1}
-	handler := NewResponsesHandler(cfg)
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	handler := NewResponsesHandler(cfg, bal)
 
 	var gotURL string
 	var gotBody map[string]any
@@ -179,7 +182,8 @@ func TestResponsesRouteReachability(t *testing.T) {
 		},
 	}
 
-	handler := NewResponsesHandler(cfg)
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	handler := NewResponsesHandler(cfg, bal)
 
 	// Build a ServeMux identical to main.go route registration
 	mux := http.NewServeMux()

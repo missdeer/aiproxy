@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/missdeer/aiproxy/balancer"
 	"github.com/missdeer/aiproxy/config"
 )
 
@@ -174,7 +175,8 @@ func TestAnthropicHandler_NoSupportedModel_NoFallback_ReturnsBadRequest(t *testi
 		},
 	}
 
-	h := NewAnthropicHandler(cfg)
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	h := NewAnthropicHandler(cfg, bal)
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{
 		"model":"claude-opus",
 		"messages":[{"role":"user","content":"hello"}]

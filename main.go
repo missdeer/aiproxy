@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/missdeer/aiproxy/balancer"
 	"github.com/missdeer/aiproxy/config"
 	"github.com/missdeer/aiproxy/middleware"
 	"github.com/missdeer/aiproxy/proxy"
@@ -44,14 +45,19 @@ func main() {
 		log.Printf("  - %s (weight: %d)", u.Name, u.Weight)
 	}
 
-	// Create handlers
-	anthropicHandler := proxy.NewAnthropicHandler(cfg)
-	openaiHandler := proxy.NewOpenAIHandler(cfg)
-	responsesHandler := proxy.NewResponsesHandler(cfg)
-	geminiHandler := proxy.NewGeminiCompatHandler(cfg)
+	// Create shared balancer for all handlers
+	sharedBalancer := balancer.NewWeightedRoundRobin(cfg.Upstreams)
 
-	// Register reload callback to update all handlers
+	// Create handlers with shared balancer
+	anthropicHandler := proxy.NewAnthropicHandler(cfg, sharedBalancer)
+	openaiHandler := proxy.NewOpenAIHandler(cfg, sharedBalancer)
+	responsesHandler := proxy.NewResponsesHandler(cfg, sharedBalancer)
+	geminiHandler := proxy.NewGeminiCompatHandler(cfg, sharedBalancer)
+	modelsHandler := proxy.NewModelsHandler(sharedBalancer)
+
+	// Register reload callback to update all handlers and balancer
 	cfgManager.OnReload(func(newCfg *config.Config) {
+		sharedBalancer.Update(newCfg.Upstreams)
 		anthropicHandler.UpdateConfig(newCfg)
 		openaiHandler.UpdateConfig(newCfg)
 		responsesHandler.UpdateConfig(newCfg)
@@ -76,6 +82,7 @@ func main() {
 	mux.Handle("POST /v1/responses/compact", middleware.DecompressionMiddleware(responsesHandler))
 	mux.Handle("POST /v1beta/models/{rest...}", middleware.DecompressionMiddleware(geminiHandler))
 	mux.Handle("POST /v1/models/{rest...}", middleware.DecompressionMiddleware(geminiHandler))
+	mux.Handle("GET /models", modelsHandler)
 
 	addr := cfg.Bind + cfg.Listen
 	srv := &http.Server{

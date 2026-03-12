@@ -24,20 +24,20 @@ type ResponsesHandler struct {
 }
 
 // NewResponsesHandler creates a new Responses API handler
-func NewResponsesHandler(cfg *config.Config) *ResponsesHandler {
+func NewResponsesHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *ResponsesHandler {
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	h := &ResponsesHandler{
-		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
+		balancer: bal,
 		client:   newHTTPClient(timeout),
 	}
 	h.cfg.Store(cfg)
 	return h
 }
 
-// UpdateConfig atomically swaps the configuration snapshot and updates the balancer.
+// UpdateConfig atomically swaps the configuration snapshot.
+// Note: balancer is shared and updated externally.
 func (h *ResponsesHandler) UpdateConfig(cfg *config.Config) {
 	h.cfg.Store(cfg)
-	h.balancer.Update(cfg.Upstreams)
 }
 
 // ResponsesRequest represents OpenAI Responses API request

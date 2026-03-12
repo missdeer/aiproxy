@@ -24,20 +24,20 @@ type GeminiHandler struct {
 }
 
 // NewGeminiHandler creates a new Gemini API handler
-func NewGeminiHandler(cfg *config.Config) *GeminiHandler {
+func NewGeminiHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *GeminiHandler {
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	h := &GeminiHandler{
-		balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
+		balancer: bal,
 		client:   newHTTPClient(timeout),
 	}
 	h.cfg.Store(cfg)
 	return h
 }
 
-// UpdateConfig atomically swaps the configuration snapshot and updates the balancer.
+// UpdateConfig atomically swaps the configuration snapshot.
+// Note: balancer is shared and updated externally.
 func (h *GeminiHandler) UpdateConfig(cfg *config.Config) {
 	h.cfg.Store(cfg)
-	h.balancer.Update(cfg.Upstreams)
 }
 
 func (h *GeminiHandler) defaultMaxTokens() int {
@@ -958,9 +958,9 @@ type GeminiCompatHandler struct {
 	handler *GeminiHandler
 }
 
-func NewGeminiCompatHandler(cfg *config.Config) *GeminiCompatHandler {
+func NewGeminiCompatHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *GeminiCompatHandler {
 	return &GeminiCompatHandler{
-		handler: NewGeminiHandler(cfg),
+		handler: NewGeminiHandler(cfg, bal),
 	}
 }
 

@@ -267,7 +267,8 @@ func TestStreamingPassthrough_OpenAI(t *testing.T) {
 			Weight: 1, APIType: config.APITypeOpenAI, AvailableModels: config.AvailableModelList{"gpt-4o-mini"},
 		}},
 	}
-	handler := NewOpenAIHandler(cfg)
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	handler := NewOpenAIHandler(cfg, bal)
 	proxy := httptest.NewServer(handler)
 	defer proxy.Close()
 
@@ -355,8 +356,7 @@ func TestStreamingPassthrough_BalancerRecording(t *testing.T) {
 	bal := balancer.NewWeightedRoundRobin(upstreams)
 
 	cfg := &config.Config{Upstreams: upstreams}
-	handler := NewOpenAIHandler(cfg)
-	handler.balancer = bal
+	handler := NewOpenAIHandler(cfg, bal)
 
 	// Pre-load 2 failures (just under threshold of 3)
 	bal.RecordFailure("test-upstream", "gpt-4o-mini")
@@ -424,8 +424,7 @@ func TestStreamingPassthrough_ClientDisconnect_NoBalancerRecord(t *testing.T) {
 	bal := balancer.NewWeightedRoundRobin(upstreams)
 
 	cfg := &config.Config{Upstreams: upstreams}
-	handler := NewOpenAIHandler(cfg)
-	handler.balancer = bal
+	handler := NewOpenAIHandler(cfg, bal)
 
 	// Pre-record a failure so we can detect if RecordSuccess clears it
 	bal.RecordFailure("test-upstream", "gpt-4o-mini")
@@ -506,7 +505,8 @@ func TestStreamingPassthrough_NonStreamingUnchanged(t *testing.T) {
 			},
 		},
 	}
-	handler := NewOpenAIHandler(cfg)
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	handler := NewOpenAIHandler(cfg, bal)
 	proxy := httptest.NewServer(handler)
 	defer proxy.Close()
 
