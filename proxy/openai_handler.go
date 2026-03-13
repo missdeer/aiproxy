@@ -20,7 +20,7 @@ import (
 type OpenAIHandler struct {
 	cfg      atomic.Pointer[config.Config]
 	balancer *balancer.WeightedRoundRobin
-	client   *http.Client
+	client   atomic.Pointer[http.Client]
 }
 
 // NewOpenAIHandler creates a new OpenAI-compatible handler
@@ -28,8 +28,8 @@ func NewOpenAIHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *Ope
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	h := &OpenAIHandler{
 		balancer: bal,
-		client:   newHTTPClient(timeout),
 	}
+	h.client.Store(newHTTPClient(timeout))
 	h.cfg.Store(cfg)
 	return h
 }
@@ -38,6 +38,7 @@ func NewOpenAIHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *Ope
 // Note: balancer is shared and updated externally.
 func (h *OpenAIHandler) UpdateConfig(cfg *config.Config) {
 	h.cfg.Store(cfg)
+	updateClientTimeout(&h.client, cfg.UpstreamRequestTimeout)
 }
 
 // OpenAI request/response types
@@ -286,7 +287,7 @@ func (h *OpenAIHandler) forwardRequest(upstream config.Upstream, model string, o
 
 		// Streaming: return raw response for direct pipe to client
 		if clientWantsStream {
-			resp, err := doHTTPRequestStream(h.client, url, modifiedBody, upstream, config.APITypeOpenAI, originalReq, "")
+			resp, err := doHTTPRequestStream(h.client.Load(), url, modifiedBody, upstream, config.APITypeOpenAI, originalReq, "")
 			if err != nil {
 				return 0, nil, nil, nil, err
 			}
@@ -301,7 +302,7 @@ func (h *OpenAIHandler) forwardRequest(upstream config.Upstream, model string, o
 		}
 
 		// Non-streaming: use existing buffered path
-		status, respBody, headers, err := doHTTPRequest(h.client, url, modifiedBody, upstream, config.APITypeOpenAI, originalReq, "")
+		status, respBody, headers, err := doHTTPRequest(h.client.Load(), url, modifiedBody, upstream, config.APITypeOpenAI, originalReq, "")
 		if err != nil {
 			return 0, nil, nil, nil, err
 		}
@@ -324,7 +325,7 @@ func (h *OpenAIHandler) forwardRequest(upstream config.Upstream, model string, o
 	if sender == nil {
 		return 0, nil, nil, nil, fmt.Errorf("unsupported outbound API type: %s", apiType)
 	}
-	status, respBody, respHeaders, respFormat, err := sender.Send(h.client, upstream, canonicalBytes, clientWantsStream, originalReq)
+	status, respBody, respHeaders, respFormat, err := sender.Send(h.client.Load(), upstream, canonicalBytes, clientWantsStream, originalReq)
 	if err != nil {
 		return status, nil, nil, nil, err
 	}

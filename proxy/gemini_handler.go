@@ -20,7 +20,7 @@ import (
 type GeminiHandler struct {
 	cfg      atomic.Pointer[config.Config]
 	balancer *balancer.WeightedRoundRobin
-	client   *http.Client
+	client   atomic.Pointer[http.Client]
 }
 
 // NewGeminiHandler creates a new Gemini API handler
@@ -28,8 +28,8 @@ func NewGeminiHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *Gem
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	h := &GeminiHandler{
 		balancer: bal,
-		client:   newHTTPClient(timeout),
 	}
+	h.client.Store(newHTTPClient(timeout))
 	h.cfg.Store(cfg)
 	return h
 }
@@ -38,6 +38,7 @@ func NewGeminiHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *Gem
 // Note: balancer is shared and updated externally.
 func (h *GeminiHandler) UpdateConfig(cfg *config.Config) {
 	h.cfg.Store(cfg)
+	updateClientTimeout(&h.client, cfg.UpstreamRequestTimeout)
 }
 
 func (h *GeminiHandler) defaultMaxTokens() int {
@@ -313,7 +314,7 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 
 		// Streaming: return raw response for direct pipe to client
 		if isStream {
-			resp, err := doHTTPRequestStream(h.client, url, originalBody, upstream, config.APITypeGemini, originalReq, rawQuery)
+			resp, err := doHTTPRequestStream(h.client.Load(), url, originalBody, upstream, config.APITypeGemini, originalReq, rawQuery)
 			if err != nil {
 				return 0, nil, nil, nil, err
 			}
@@ -328,7 +329,7 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 		}
 
 		// Non-streaming: use existing buffered path
-		status, respBody, headers, err := doHTTPRequest(h.client, url, originalBody, upstream, config.APITypeGemini, originalReq, rawQuery)
+		status, respBody, headers, err := doHTTPRequest(h.client.Load(), url, originalBody, upstream, config.APITypeGemini, originalReq, rawQuery)
 		if err != nil {
 			return 0, nil, nil, nil, err
 		}
@@ -359,7 +360,7 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 	// try to get the raw response for PipeStream passthrough.
 	if isStream {
 		if streamSender, ok := sender.(StreamCapableSender); ok {
-			resp, respFormat, err := streamSender.SendStream(h.client, upstream, canonicalBytes, originalReq)
+			resp, respFormat, err := streamSender.SendStream(h.client.Load(), upstream, canonicalBytes, originalReq)
 			if err != nil {
 				return 0, nil, nil, nil, err
 			}
@@ -392,7 +393,7 @@ func (h *GeminiHandler) forwardRequest(upstream config.Upstream, model string, o
 		}
 	}
 
-	status, respBody, respHeaders, respFormat, err := sender.Send(h.client, upstream, canonicalBytes, isStream, originalReq)
+	status, respBody, respHeaders, respFormat, err := sender.Send(h.client.Load(), upstream, canonicalBytes, isStream, originalReq)
 	if err != nil {
 		return status, nil, nil, nil, err
 	}

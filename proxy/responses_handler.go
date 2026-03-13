@@ -20,7 +20,7 @@ import (
 type ResponsesHandler struct {
 	cfg      atomic.Pointer[config.Config]
 	balancer *balancer.WeightedRoundRobin
-	client   *http.Client
+	client   atomic.Pointer[http.Client]
 }
 
 // NewResponsesHandler creates a new Responses API handler
@@ -28,8 +28,8 @@ func NewResponsesHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	h := &ResponsesHandler{
 		balancer: bal,
-		client:   newHTTPClient(timeout),
 	}
+	h.client.Store(newHTTPClient(timeout))
 	h.cfg.Store(cfg)
 	return h
 }
@@ -38,6 +38,7 @@ func NewResponsesHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *
 // Note: balancer is shared and updated externally.
 func (h *ResponsesHandler) UpdateConfig(cfg *config.Config) {
 	h.cfg.Store(cfg)
+	updateClientTimeout(&h.client, cfg.UpstreamRequestTimeout)
 }
 
 // ResponsesRequest represents OpenAI Responses API request
@@ -308,7 +309,7 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 
 		// Streaming: return raw response for direct pipe to client
 		if clientWantsStream {
-			resp, err := doHTTPRequestStream(h.client, url, modifiedBody, upstream, config.APITypeResponses, originalReq, rawQuery)
+			resp, err := doHTTPRequestStream(h.client.Load(), url, modifiedBody, upstream, config.APITypeResponses, originalReq, rawQuery)
 			if err != nil {
 				return 0, nil, nil, nil, err
 			}
@@ -323,7 +324,7 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 		}
 
 		// Non-streaming: use existing buffered path
-		status, respBody, headers, err := doHTTPRequest(h.client, url, modifiedBody, upstream, config.APITypeResponses, originalReq, rawQuery)
+		status, respBody, headers, err := doHTTPRequest(h.client.Load(), url, modifiedBody, upstream, config.APITypeResponses, originalReq, rawQuery)
 		if err != nil {
 			return 0, nil, nil, nil, err
 		}
@@ -345,7 +346,7 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 	// try to get the raw response for PipeStream passthrough.
 	if clientWantsStream {
 		if streamSender, ok := sender.(StreamCapableSender); ok {
-			resp, respFormat, err := streamSender.SendStream(h.client, upstream, canonicalBytes, originalReq)
+			resp, respFormat, err := streamSender.SendStream(h.client.Load(), upstream, canonicalBytes, originalReq)
 			if err != nil {
 				return 0, nil, nil, nil, err
 			}
@@ -378,7 +379,7 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 		}
 	}
 
-	status, respBody, respHeaders, respFormat, err := sender.Send(h.client, upstream, canonicalBytes, clientWantsStream, originalReq)
+	status, respBody, respHeaders, respFormat, err := sender.Send(h.client.Load(), upstream, canonicalBytes, clientWantsStream, originalReq)
 	if err != nil {
 		return status, nil, nil, nil, err
 	}

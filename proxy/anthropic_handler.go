@@ -18,15 +18,15 @@ import (
 type AnthropicHandler struct {
 	cfg      atomic.Pointer[config.Config]
 	balancer *balancer.WeightedRoundRobin
-	client   *http.Client
+	client   atomic.Pointer[http.Client]
 }
 
 func NewAnthropicHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *AnthropicHandler {
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	h := &AnthropicHandler{
 		balancer: bal,
-		client:   newHTTPClient(timeout),
 	}
+	h.client.Store(newHTTPClient(timeout))
 	h.cfg.Store(cfg)
 	return h
 }
@@ -35,6 +35,7 @@ func NewAnthropicHandler(cfg *config.Config, bal *balancer.WeightedRoundRobin) *
 // Note: balancer is shared and updated externally.
 func (h *AnthropicHandler) UpdateConfig(cfg *config.Config) {
 	h.cfg.Store(cfg)
+	updateClientTimeout(&h.client, cfg.UpstreamRequestTimeout)
 }
 
 type MessageRequest struct {
@@ -280,7 +281,7 @@ func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string
 
 		// Streaming: return raw response for direct pipe to client
 		if clientWantsStream {
-			resp, err := doHTTPRequestStream(h.client, url, modifiedBody, upstream, config.APITypeAnthropic, originalReq, "")
+			resp, err := doHTTPRequestStream(h.client.Load(), url, modifiedBody, upstream, config.APITypeAnthropic, originalReq, "")
 			if err != nil {
 				return 0, nil, nil, nil, err
 			}
@@ -295,7 +296,7 @@ func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string
 		}
 
 		// Non-streaming: use existing buffered path
-		status, respBody, headers, err := doHTTPRequest(h.client, url, modifiedBody, upstream, config.APITypeAnthropic, originalReq, "")
+		status, respBody, headers, err := doHTTPRequest(h.client.Load(), url, modifiedBody, upstream, config.APITypeAnthropic, originalReq, "")
 		if err != nil {
 			return 0, nil, nil, nil, err
 		}
@@ -312,14 +313,14 @@ func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string
 		clientUA := originalReq.Header.Get("User-Agent")
 
 		if clientWantsStream {
-			resp, err := ForwardToClaudeCodeStream(h.client, upstream, modifiedBody, ctx, clientUA)
+			resp, err := ForwardToClaudeCodeStream(h.client.Load(), upstream, modifiedBody, ctx, clientUA)
 			if err != nil {
 				return 0, nil, nil, nil, err
 			}
 			return HandleStreamResponse(resp)
 		}
 
-		status, respBody, headers, err := ForwardToClaudeCodeWithContext(h.client, upstream, modifiedBody, ctx, false, clientUA)
+		status, respBody, headers, err := ForwardToClaudeCodeWithContext(h.client.Load(), upstream, modifiedBody, ctx, false, clientUA)
 		if err != nil {
 			return 0, nil, nil, nil, err
 		}
@@ -346,7 +347,7 @@ func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string
 	// try to get the raw response for PipeStream passthrough.
 	if clientWantsStream {
 		if streamSender, ok := sender.(StreamCapableSender); ok {
-			resp, respFormat, err := streamSender.SendStream(h.client, upstream, canonicalBytes, originalReq)
+			resp, respFormat, err := streamSender.SendStream(h.client.Load(), upstream, canonicalBytes, originalReq)
 			if err != nil {
 				return 0, nil, nil, nil, err
 			}
@@ -379,7 +380,7 @@ func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string
 		}
 	}
 
-	status, respBody, respHeaders, respFormat, err := sender.Send(h.client, upstream, canonicalBytes, clientWantsStream, originalReq)
+	status, respBody, respHeaders, respFormat, err := sender.Send(h.client.Load(), upstream, canonicalBytes, clientWantsStream, originalReq)
 	if err != nil {
 		return status, nil, nil, nil, err
 	}

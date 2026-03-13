@@ -100,7 +100,7 @@ func TestResponsesHandler_ForwardRequest_NativeResponsesCompactPreservesPathAndQ
 	var gotURL string
 	var gotBody map[string]any
 
-	handler.client = &http.Client{
+	handler.client.Store(&http.Client{
 		Transport: &mockRoundTripper{
 			handler: func(req *http.Request) (*http.Response, error) {
 				gotURL = req.URL.String()
@@ -120,7 +120,7 @@ func TestResponsesHandler_ForwardRequest_NativeResponsesCompactPreservesPathAndQ
 				}, nil
 			},
 		},
-	}
+	})
 
 	upstream := config.Upstream{
 		Name:    "test-upstream",

@@ -21,7 +21,7 @@ import (
 type BaseHandler struct {
 	cfg      atomic.Pointer[config.Config]
 	Balancer *balancer.WeightedRoundRobin
-	Client   *http.Client
+	Client   atomic.Pointer[http.Client]
 }
 
 // NewBaseHandler creates a new BaseHandler with shared components
@@ -29,8 +29,8 @@ func NewBaseHandler(cfg *config.Config) *BaseHandler {
 	timeout := time.Duration(cfg.UpstreamRequestTimeout) * time.Second
 	b := &BaseHandler{
 		Balancer: balancer.NewWeightedRoundRobin(cfg.Upstreams),
-		Client:   newHTTPClient(timeout),
 	}
+	b.Client.Store(newHTTPClient(timeout))
 	b.cfg.Store(cfg)
 	return b
 }
@@ -47,6 +47,25 @@ func newHTTPClient(responseHeaderTimeout time.Duration) *http.Client {
 	return &http.Client{
 		Transport: &middleware.CompressedTransport{Base: transport},
 	}
+}
+
+// updateClientTimeout atomically replaces the http.Client with a new one
+// that has the updated ResponseHeaderTimeout.
+//
+// This replaces the entire client (including connection pool) rather than
+// mutating Transport.ResponseHeaderTimeout in-place, to avoid a data race
+// with concurrent requests reading the field. The old client's idle
+// connections drain naturally via their own idle timeout.
+//
+// NOTE: This only updates handler-level clients used for upstream API requests.
+// OAuth token refresh clients (cached per auth-file in oauthcache.Manager)
+// are NOT updated here. Although auth_failover and proactive_refresh pass the
+// current upstream_request_timeout to oauthcache, the cached per-auth-file
+// client retains the timeout from its first creation. This is acceptable
+// because token refresh is a short-lived auth operation whose timeout need
+// not track upstream_request_timeout changes at runtime.
+func updateClientTimeout(client *atomic.Pointer[http.Client], timeoutSeconds int) {
+	client.Store(newHTTPClient(time.Duration(timeoutSeconds) * time.Second))
 }
 
 // ClientResponseHeaderTimeout extracts the ResponseHeaderTimeout from a client's transport.
@@ -111,6 +130,7 @@ func ApplyBodyCompression(req *http.Request, body []byte, upstream config.Upstre
 // UpdateConfig atomically swaps the configuration snapshot and updates the balancer.
 func (b *BaseHandler) UpdateConfig(cfg *config.Config) {
 	b.cfg.Store(cfg)
+	updateClientTimeout(&b.Client, cfg.UpstreamRequestTimeout)
 	b.Balancer.Update(cfg.Upstreams)
 }
 

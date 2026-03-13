@@ -153,6 +153,28 @@ curl http://localhost:8080/v1beta/models/gemini-pro:generateContent \
   -d '{"contents": [{"parts": [{"text": "Hello!"}]}]}'
 ```
 
+## Config Hot-Reload
+
+The proxy watches `config.yaml` for changes and applies updates without restart. Not all fields can be hot-reloaded — some require a full restart to take effect.
+
+**Hot-reloadable (applied immediately):**
+
+| Field | Scope |
+|---|---|
+| `upstreams` | All sub-fields: `name`, `enabled`, `base_url`, `token`, `weight`, `model_mappings`, `available_models`, `api_type`, `auth_files`, `request_compression`, `http_headers` |
+| `upstream_request_timeout` | Timeout for upstream response headers |
+| `default_max_tokens` | Default max tokens for Gemini requests |
+| `model_fallback` | Model fallback chain |
+| `api-key` | Client authentication keys |
+
+**Requires restart:**
+
+| Field | Reason |
+|---|---|
+| `bind` | Server listen address is fixed after startup |
+| `listen` | Server listen port is fixed after startup |
+| `log` | Log output target (`file`, `max_size`, `max_backups`, `max_age`, `compress`) is configured once at startup |
+
 ## How It Works
 
 1. **Request Reception** — Client sends request in any supported format (Anthropic / OpenAI / Responses / Gemini)
