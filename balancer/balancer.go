@@ -132,6 +132,22 @@ func (w *WeightedRoundRobin) RecordSuccess(name, model string) {
 	}
 }
 
+// ResetModel immediately clears the circuit-breaker state for an upstream+model pair.
+// Returns true if the pair was unavailable and has been reset.
+func (w *WeightedRoundRobin) ResetModel(name, model string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if modelStates, ok := w.states[name]; ok {
+		if state, ok := modelStates[model]; ok && state.unavailable {
+			state.unavailable = false
+			state.failures = 0
+			return true
+		}
+	}
+	return false
+}
+
 // RecordFailure records a failure for an upstream+model pair.
 // Returns true if the upstream+model is now marked as unavailable.
 func (w *WeightedRoundRobin) RecordFailure(name, model string) bool {

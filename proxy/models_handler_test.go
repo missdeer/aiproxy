@@ -491,3 +491,89 @@ func TestUnavailableModelsHandler_ConfigReloadRemovesStaleEntries(t *testing.T) 
 		t.Fatalf("after reload: got %d entries, want 0", len(entries))
 	}
 }
+
+func TestResetModelHandler_ResetsUnavailableModel(t *testing.T) {
+	cfg := &config.Config{
+		Upstreams: []config.Upstream{
+			{
+				Name:            "upstream-1",
+				BaseURL:         "https://api.example.com",
+				Tokens:          config.TokenList{"sk-test"},
+				APIType:         config.APITypeAnthropic,
+				Weight:          1,
+				AvailableModels: config.AvailableModelList{"claude-opus", "claude-sonnet"},
+			},
+		},
+	}
+
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	bal.RecordFailure("upstream-1", "claude-opus")
+	bal.RecordFailure("upstream-1", "claude-opus")
+	bal.RecordFailure("upstream-1", "claude-opus")
+
+	handler := NewResetModelHandler(bal)
+
+	body := `{"upstream_name":"upstream-1","model_name":"claude-opus"}`
+	req := httptest.NewRequest(http.MethodPost, "/reset_model", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	// Verify model is available again
+	if !bal.IsAvailable("upstream-1", "claude-opus") {
+		t.Fatal("claude-opus should be available after reset")
+	}
+}
+
+func TestResetModelHandler_NotFoundWhenModelIsAvailable(t *testing.T) {
+	cfg := &config.Config{
+		Upstreams: []config.Upstream{
+			{
+				Name:            "upstream-1",
+				BaseURL:         "https://api.example.com",
+				Tokens:          config.TokenList{"sk-test"},
+				APIType:         config.APITypeAnthropic,
+				Weight:          1,
+				AvailableModels: config.AvailableModelList{"claude-opus"},
+			},
+		},
+	}
+
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	handler := NewResetModelHandler(bal)
+
+	body := `{"upstream_name":"upstream-1","model_name":"claude-opus"}`
+	req := httptest.NewRequest(http.MethodPost, "/reset_model", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestResetModelHandler_BadRequest(t *testing.T) {
+	bal := balancer.NewWeightedRoundRobin(nil)
+	handler := NewResetModelHandler(bal)
+
+	// Empty body
+	req := httptest.NewRequest(http.MethodPost, "/reset_model", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	// Invalid JSON
+	req = httptest.NewRequest(http.MethodPost, "/reset_model", strings.NewReader(`not json`))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}

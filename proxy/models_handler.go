@@ -63,3 +63,38 @@ func (h *UnavailableModelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 }
+
+type resetModelRequest struct {
+	UpstreamName string `json:"upstream_name"`
+	ModelName    string `json:"model_name"`
+}
+
+type ResetModelHandler struct {
+	balancer *balancer.WeightedRoundRobin
+}
+
+func NewResetModelHandler(bal *balancer.WeightedRoundRobin) *ResetModelHandler {
+	return &ResetModelHandler{balancer: bal}
+}
+
+func (h *ResetModelHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var req resetModelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if req.UpstreamName == "" || req.ModelName == "" {
+		http.Error(w, `{"error":"upstream_name and model_name are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if !h.balancer.ResetModel(req.UpstreamName, req.ModelName) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "model is not unavailable"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
