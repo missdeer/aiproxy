@@ -54,6 +54,7 @@ func main() {
 	responsesHandler := proxy.NewResponsesHandler(cfg, sharedBalancer)
 	geminiHandler := proxy.NewGeminiCompatHandler(cfg, sharedBalancer)
 	modelsHandler := proxy.NewModelsHandler(sharedBalancer)
+	unavailableModelsHandler := proxy.NewUnavailableModelsHandler(sharedBalancer)
 
 	// Create auth middleware
 	authMiddleware := middleware.NewAuthMiddleware(cfg)
@@ -87,6 +88,7 @@ func main() {
 	mux.Handle("POST /v1beta/models/{rest...}", authMiddleware.Middleware(middleware.DecompressionMiddleware(geminiHandler)))
 	mux.Handle("POST /v1/models/{rest...}", authMiddleware.Middleware(middleware.DecompressionMiddleware(geminiHandler)))
 	mux.Handle("GET /models", authMiddleware.Middleware(modelsHandler))
+	mux.Handle("GET /unavailable_models", authMiddleware.Middleware(unavailableModelsHandler))
 
 	addr := cfg.Bind + cfg.Listen
 	srv := &http.Server{

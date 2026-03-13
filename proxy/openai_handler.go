@@ -228,7 +228,6 @@ func (h *OpenAIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-
 		// Client disconnected — don't attempt fallback models
 		if r.Context().Err() != nil {
 			log.Printf("[INFO] Client disconnected, aborting fallback")

@@ -351,3 +351,143 @@ func TestModelsHandler_ResponseIsSorted(t *testing.T) {
 		}
 	}
 }
+
+func TestUnavailableModelsHandler_ReturnsUnavailableModels(t *testing.T) {
+	cfg := &config.Config{
+		Upstreams: []config.Upstream{
+			{
+				Name:            "upstream-1",
+				BaseURL:         "https://api.example.com",
+				Tokens:          config.TokenList{"sk-test"},
+				APIType:         config.APITypeAnthropic,
+				Weight:          1,
+				AvailableModels: config.AvailableModelList{"claude-opus", "claude-sonnet"},
+			},
+		},
+	}
+
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+
+	// Mark claude-opus as unavailable
+	bal.RecordFailure("upstream-1", "claude-opus")
+	bal.RecordFailure("upstream-1", "claude-opus")
+	bal.RecordFailure("upstream-1", "claude-opus")
+
+	handler := NewUnavailableModelsHandler(bal)
+
+	req := httptest.NewRequest(http.MethodGet, "/unavailable_models", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var entries []unavailableModelEntry
+	if err := json.NewDecoder(rec.Body).Decode(&entries); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+
+	if entries[0].UpstreamName != "upstream-1" {
+		t.Fatalf("upstream_name = %s, want upstream-1", entries[0].UpstreamName)
+	}
+	if entries[0].ModelName != "claude-opus" {
+		t.Fatalf("model_name = %s, want claude-opus", entries[0].ModelName)
+	}
+	if entries[0].TimeToReset <= 0 {
+		t.Fatalf("time_to_reset = %f, want > 0", entries[0].TimeToReset)
+	}
+}
+
+func TestUnavailableModelsHandler_EmptyWhenAllAvailable(t *testing.T) {
+	cfg := &config.Config{
+		Upstreams: []config.Upstream{
+			{
+				Name:            "upstream-1",
+				BaseURL:         "https://api.example.com",
+				Tokens:          config.TokenList{"sk-test"},
+				APIType:         config.APITypeAnthropic,
+				Weight:          1,
+				AvailableModels: config.AvailableModelList{"claude-opus"},
+			},
+		},
+	}
+
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+	handler := NewUnavailableModelsHandler(bal)
+
+	req := httptest.NewRequest(http.MethodGet, "/unavailable_models", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var entries []unavailableModelEntry
+	if err := json.NewDecoder(rec.Body).Decode(&entries); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(entries) != 0 {
+		t.Fatalf("got %d entries, want 0", len(entries))
+	}
+}
+
+func TestUnavailableModelsHandler_ConfigReloadRemovesStaleEntries(t *testing.T) {
+	cfg := &config.Config{
+		Upstreams: []config.Upstream{
+			{
+				Name:            "upstream-1",
+				BaseURL:         "https://api.example.com",
+				Tokens:          config.TokenList{"sk-test"},
+				APIType:         config.APITypeAnthropic,
+				Weight:          1,
+				AvailableModels: config.AvailableModelList{"claude-opus", "claude-sonnet"},
+			},
+		},
+	}
+
+	bal := balancer.NewWeightedRoundRobin(cfg.Upstreams)
+
+	// Mark claude-opus as unavailable
+	bal.RecordFailure("upstream-1", "claude-opus")
+	bal.RecordFailure("upstream-1", "claude-opus")
+	bal.RecordFailure("upstream-1", "claude-opus")
+
+	handler := NewUnavailableModelsHandler(bal)
+
+	// Before reload: claude-opus should be reported
+	req := httptest.NewRequest(http.MethodGet, "/unavailable_models", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var entries []unavailableModelEntry
+	json.NewDecoder(rec.Body).Decode(&entries)
+	if len(entries) != 1 || entries[0].ModelName != "claude-opus" {
+		t.Fatalf("before reload: got %v, want [claude-opus]", entries)
+	}
+
+	// Reload config: upstream-1 no longer supports claude-opus
+	bal.Update([]config.Upstream{
+		{
+			Name:            "upstream-1",
+			BaseURL:         "https://api.example.com",
+			Tokens:          config.TokenList{"sk-test"},
+			APIType:         config.APITypeAnthropic,
+			Weight:          1,
+			AvailableModels: config.AvailableModelList{"claude-sonnet"},
+		},
+	})
+
+	// After reload: claude-opus should no longer appear
+	req = httptest.NewRequest(http.MethodGet, "/unavailable_models", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	entries = nil
+	json.NewDecoder(rec.Body).Decode(&entries)
+	if len(entries) != 0 {
+		t.Fatalf("after reload: got %d entries, want 0", len(entries))
+	}
+}

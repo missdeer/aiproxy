@@ -395,6 +395,62 @@ func (w *WeightedRoundRobin) Update(upstreams []config.Upstream) {
 	w.maxWeight = maxWeight
 }
 
+type UnavailableModel struct {
+	UpstreamName string        `json:"upstream_name"`
+	ModelName    string        `json:"model_name"`
+	TimeToReset  time.Duration `json:"-"`
+}
+
+// UnavailableModels returns all upstream+model pairs currently in circuit-breaker cooldown.
+// Only returns entries for upstreams that are still configured.
+func (w *WeightedRoundRobin) UnavailableModels() []UnavailableModel {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	activeUpstreams := make(map[string]*config.Upstream, len(w.upstreams))
+	for i := range w.upstreams {
+		activeUpstreams[w.upstreams[i].Name] = &w.upstreams[i]
+	}
+
+	var result []UnavailableModel
+	now := time.Now()
+
+	for name, modelStates := range w.states {
+		u, ok := activeUpstreams[name]
+		if !ok {
+			continue
+		}
+		for model, state := range modelStates {
+			if len(u.AvailableModels) > 0 && !u.SupportsModel(model) {
+				continue
+			}
+			if !state.unavailable {
+				continue
+			}
+			remaining := cooldownPeriod - now.Sub(state.unavailableAt)
+			if remaining <= 0 {
+				state.unavailable = false
+				state.failures = 0
+				continue
+			}
+			result = append(result, UnavailableModel{
+				UpstreamName: name,
+				ModelName:    model,
+				TimeToReset:  remaining,
+			})
+		}
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].UpstreamName != result[j].UpstreamName {
+			return result[i].UpstreamName < result[j].UpstreamName
+		}
+		return result[i].ModelName < result[j].ModelName
+	})
+
+	return result
+}
+
 // AvailableModels returns a sorted list of all models that have at least one available upstream.
 // A model is considered available if at least one upstream supports it and is not circuit-broken.
 // Note: Only models explicitly listed in upstream.AvailableModels are included.
