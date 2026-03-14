@@ -307,9 +307,14 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 			rawQuery = originalReq.URL.RawQuery
 		}
 
+		// Sanitize User-Agent for native passthrough (don't mutate originalReq)
+		fwdReq := originalReq.WithContext(originalReq.Context())
+		fwdReq.Header = originalReq.Header.Clone()
+		fwdReq.Header.Set("User-Agent", codexResolveUserAgent(originalReq.Header.Get("User-Agent")))
+
 		// Streaming: return raw response for direct pipe to client
 		if clientWantsStream {
-			resp, err := doHTTPRequestStream(h.client.Load(), url, modifiedBody, upstream, config.APITypeResponses, originalReq, rawQuery)
+			resp, err := doHTTPRequestStream(h.client.Load(), url, modifiedBody, upstream, config.APITypeResponses, fwdReq, rawQuery)
 			if err != nil {
 				return 0, nil, nil, nil, err
 			}
@@ -324,7 +329,7 @@ func (h *ResponsesHandler) forwardRequest(upstream config.Upstream, model string
 		}
 
 		// Non-streaming: use existing buffered path
-		status, respBody, headers, err := doHTTPRequest(h.client.Load(), url, modifiedBody, upstream, config.APITypeResponses, originalReq, rawQuery)
+		status, respBody, headers, err := doHTTPRequest(h.client.Load(), url, modifiedBody, upstream, config.APITypeResponses, fwdReq, rawQuery)
 		if err != nil {
 			return 0, nil, nil, nil, err
 		}

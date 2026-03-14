@@ -279,9 +279,14 @@ func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string
 			url = url + "?" + originalReq.URL.RawQuery
 		}
 
+		// Sanitize User-Agent for native passthrough (don't mutate originalReq)
+		fwdReq := originalReq.WithContext(originalReq.Context())
+		fwdReq.Header = originalReq.Header.Clone()
+		fwdReq.Header.Set("User-Agent", claudeCodeResolveUserAgent(originalReq.Header.Get("User-Agent")))
+
 		// Streaming: return raw response for direct pipe to client
 		if clientWantsStream {
-			resp, err := doHTTPRequestStream(h.client.Load(), url, modifiedBody, upstream, config.APITypeAnthropic, originalReq, "")
+			resp, err := doHTTPRequestStream(h.client.Load(), url, modifiedBody, upstream, config.APITypeAnthropic, fwdReq, "")
 			if err != nil {
 				return 0, nil, nil, nil, err
 			}
@@ -296,7 +301,7 @@ func (h *AnthropicHandler) forwardRequest(upstream config.Upstream, model string
 		}
 
 		// Non-streaming: use existing buffered path
-		status, respBody, headers, err := doHTTPRequest(h.client.Load(), url, modifiedBody, upstream, config.APITypeAnthropic, originalReq, "")
+		status, respBody, headers, err := doHTTPRequest(h.client.Load(), url, modifiedBody, upstream, config.APITypeAnthropic, fwdReq, "")
 		if err != nil {
 			return 0, nil, nil, nil, err
 		}
