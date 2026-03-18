@@ -36,11 +36,11 @@ const (
 	codexClientID     = "app_EMoamEEZ73f0CkXaXp7hrann"
 	codexRefreshScope = "openid profile email"
 	codexBaseURL      = "https://chatgpt.com/backend-api/codex"
-	codexVersion      = "0.106.0"
-	codexUserAgent    = "codex_cli_rs/0.106.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464"
+	codexVersion      = "0.115.0"
+	codexUserAgent    = "codex_tui/0.115.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464"
 )
 
-var codexClientUARegex = regexp.MustCompile(`^(codex_cli_rs|Codex Desktop)/\d+\.\d+\.\d+(-(alpha|beta|rc|dev|preview)\.[0-9]+)?($|\s\()`)
+var codexClientUARegex = regexp.MustCompile(`^(codex_cli_rs|codex_tui|Codex Desktop)/\d+\.\d+\.\d+(-(alpha|beta|rc|dev|preview)\.[0-9]+)?($|\s\()`)
 
 func codexResolveUserAgent(clientUA string) string {
 	if codexClientUARegex.MatchString(clientUA) {
