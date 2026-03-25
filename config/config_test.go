@@ -210,7 +210,7 @@ func TestUpstreamGetRequestContentEncoding(t *testing.T) {
 		requestCompression string
 		want               string
 	}{
-		{"empty defaults to zstd", "", "zstd"},
+		{"empty defaults to none", "", ""},
 		{"none", "none", ""},
 		{"identity", "identity", ""},
 		{"trim and lowercase", "  GZIP  ", "gzip"},
@@ -218,7 +218,7 @@ func TestUpstreamGetRequestContentEncoding(t *testing.T) {
 		{"zstd", "zstd", "zstd"},
 		{"x-zstd alias", "x-zstd", "zstd"},
 		{"br", "br", "br"},
-		{"unknown defaults to zstd", "snappy", "zstd"},
+		{"unknown defaults to none", "snappy", ""},
 	}
 
 	for _, tt := range tests {

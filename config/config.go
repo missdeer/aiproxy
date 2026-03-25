@@ -127,9 +127,9 @@ func (u *Upstream) GetAcceptEncoding() string {
 // Returns "zstd" for empty/unknown (default enabled), or "" for none/identity.
 func (u *Upstream) GetRequestContentEncoding() string {
 	switch strings.TrimSpace(strings.ToLower(u.RequestCompression)) {
-	case "", "zstd", "x-zstd":
+	case "zstd", "x-zstd":
 		return "zstd"
-	case "none", "identity":
+	case "", "none", "identity":
 		return ""
 	case "gzip":
 		return "gzip"
