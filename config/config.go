@@ -138,8 +138,8 @@ func (u *Upstream) GetRequestContentEncoding() string {
 	case "br":
 		return "br"
 	default:
-		log.Printf("[CONFIG] upstream %q: unknown request_compression %q, defaulting to zstd", u.Name, u.RequestCompression)
-		return "zstd"
+		log.Printf("[CONFIG] upstream %q: unknown request_compression %q, defaulting to none", u.Name, u.RequestCompression)
+		return ""
 	}
 }
 
