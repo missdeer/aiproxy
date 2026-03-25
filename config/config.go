@@ -311,9 +311,6 @@ func Load(path string) (*Config, error) {
 		if cfg.Upstreams[i].Weight <= 0 {
 			cfg.Upstreams[i].Weight = 1
 		}
-		if cfg.Upstreams[i].RequestCompression == "" {
-			cfg.Upstreams[i].RequestCompression = "zstd"
-		}
 		// Strip empty/whitespace-only token entries.
 		if len(cfg.Upstreams[i].Tokens) > 0 {
 			filtered := cfg.Upstreams[i].Tokens[:0]
